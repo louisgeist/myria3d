@@ -1,3 +1,8 @@
+# Geist - 13/11/2025
+# export CONDA_OVERRIDE_CUDA=11.8
+# mamba env create -f /data/geist/myria3d/environment.yml --channel-priority flexible -vv
+
+
 # Simple install with
 # mamba env create -f environment.yml
 name: myria3d
@@ -8,7 +13,7 @@ channels:
   - comet_ml
   - conda-forge
 dependencies:
-  - python=3.9.*
+  - python=3.10.*
   - pip
   # --------- Deep Learning --------- #
   - pytorch::pytorch=2.1
@@ -29,10 +34,10 @@ dependencies:
   - numpy
   - h5py
   # --------- geo --------- #
-  - pdal==2.6.*
+  - pdal=2.8.*
   - python-pdal
-  - conda-forge:gdal
-  - conda_forge:pyproj
+  - conda-forge::gdal
+  - conda-forge::pyproj
   # --------- Visualization --------- #
   - pandas
   - matplotlib
