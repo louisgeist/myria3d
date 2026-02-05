@@ -1,4 +1,5 @@
 # default preparations with grid sampling and random sampling.
+voxel: 0.25
 
 train:
 
@@ -8,13 +9,14 @@ train:
       - ${dataset_description.classification_preprocessing_dict}
       - ${dataset_description.classification_dict}
 
+
   DropPointsByClass:
     _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
 
   GridSampling:
     _target_: torch_geometric.transforms.GridSampling
     _args_:
-      - 0.25
+      - ${datamodule.transforms.preparations.voxel}
   
   MinimumNumNodes:
     _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
@@ -28,6 +30,11 @@ train:
 
   Center:
     _target_: torch_geometric.transforms.Center
+  
+  TargetToOneHot:
+    _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
+    _args_:
+      - ${dataset_description.num_classes}
 
 eval:
 
@@ -49,7 +56,7 @@ eval:
   GridSampling:
     _target_: torch_geometric.transforms.GridSampling
     _args_:
-      - 0.25
+      - ${datamodule.transforms.preparations.voxel}
 
   MinimumNumNodes:
     _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
@@ -66,7 +73,13 @@ eval:
 
   Center:
     _target_: torch_geometric.transforms.Center
-  
+    
+  TargetToOneHot:
+    _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
+    _args_:
+      - ${dataset_description.num_classes}
+
+
 predict:
 
   DropPointsByClass:
@@ -78,7 +91,7 @@ predict:
   GridSampling:
     _target_: torch_geometric.transforms.GridSampling
     _args_:
-      - 0.25
+      - ${datamodule.transforms.preparations.voxel}
 
   MinimumNumNodes:
     _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
