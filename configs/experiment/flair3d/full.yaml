@@ -1,0 +1,49 @@
+# @package _global_
+
+# Nota : call "python myria3d/pctl/dataset/toy_dataset.py" to create a toy dataset before running this.
+defaults:
+  - override /model: pyg_randla_net_model.yaml
+  - override /datamodule/transforms/augmentations: light.yaml
+  - override /logger: wandb.yaml
+  - override /dataset_description: flair3d.yaml
+
+model:
+  criterion:
+    ignore_index: 9 # num_classes - 1
+  
+  monitor: "val/iou"
+
+callbacks:
+  model_checkpoint:
+    monitor: ${model.monitor}
+    mode: "max"
+
+  early_stopping:
+    monitor: ${model.monitor}
+    mode: "max"
+
+logger:
+  wandb:
+    name: "RandLaNet-full"
+
+trainer:
+  min_epochs: 100
+  max_epochs: 150
+  num_sanity_val_steps: 2
+  accelerator: gpu
+  
+
+datamodule:
+  batch_size: 12
+  num_workers: 2
+  # runtime.cwd is where application is run from e.g. where run.py is.
+  data_dir: "${hydra:runtime.cwd}/tests/data/"
+  split_csv_path: "${hydra:runtime.cwd}/tests/data/flair3d_split.csv"
+  hdf5_file_path: "${hydra:runtime.cwd}/tests/data/flair3d_tilewidthFix.hdf5"
+
+  points_pre_transform:
+    _target_: functools.partial
+    _args_:
+      - "${get_method:myria3d.pctl.dataset.flair3d.flair3d_pre_transform}"
+
+  tile_width: 100
