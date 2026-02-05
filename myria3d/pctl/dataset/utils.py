@@ -38,6 +38,38 @@ def get_mosaic_of_centers(tile_width: Number, subtile_width: Number, subtile_ove
     return [np.array([x, y]) for x in xy_range for y in xy_range]
 
 
+def pdal_read_point_cloud_array(cloud_path: str, epsg: str):
+    """Read point cloud (LAS or PLY) as a named array.
+
+    Args:
+        cloud_path (str): input point cloud file path (LAS or PLY)
+        epsg (str): epsg to force the reading with
+
+    Returns:
+        np.ndarray: named array with all point cloud dimensions, including extra ones, with dict-like access.
+
+    """
+    p1 = pdal.Pipeline() | get_pdal_reader(cloud_path, epsg)
+    p1.execute()
+    return p1.arrays[0]
+
+
+def pdal_read_point_cloud_array_as_float32(cloud_path: str, epsg: str):
+    """Read point cloud (LAS or PLY) as a named array, casted to floats.
+
+    Args:
+        cloud_path (str): input point cloud file path (LAS or PLY)
+        epsg (str): epsg to force the reading with
+
+    Returns:
+        np.ndarray: named array with all point cloud dimensions casted to float32.
+
+    """
+    arr = pdal_read_point_cloud_array(cloud_path, epsg)
+    all_floats = np.dtype({"names": arr.dtype.names, "formats": ["f4"] * len(arr.dtype.names)})
+    return arr.astype(all_floats)
+
+
 def pdal_read_las_array(las_path: str, epsg: str):
     """Read LAS as a named array.
 
@@ -49,57 +81,83 @@ def pdal_read_las_array(las_path: str, epsg: str):
         np.ndarray: named array with all LAS dimensions, including extra ones, with dict-like access.
 
     """
-    p1 = pdal.Pipeline() | get_pdal_reader(las_path, epsg)
-    p1.execute()
-    return p1.arrays[0]
+    return pdal_read_point_cloud_array(las_path, epsg)
 
 
 def pdal_read_las_array_as_float32(las_path: str, epsg: str):
     """Read LAS as a a named array, casted to floats."""
-    arr = pdal_read_las_array(las_path, epsg)
-    all_floats = np.dtype({"names": arr.dtype.names, "formats": ["f4"] * len(arr.dtype.names)})
-    return arr.astype(all_floats)
+    return pdal_read_point_cloud_array_as_float32(las_path, epsg)
 
 
-def get_metadata(las_path: str) -> dict:
-    """ returns metadata contained in a las file
+def get_metadata(cloud_path: str) -> dict:
+    """Returns metadata contained in a point cloud file (LAS or PLY).
+
     Args:
-        las_path (str): input LAS path to get metadata from.
+        cloud_path (str): input point cloud file path (LAS or PLY) to get metadata from.
     Returns:
         dict : the metadata.
     """
-    pipeline = pdal.Reader.las(filename=las_path).pipeline()
+    file_ext = Path(cloud_path).suffix.lower()
+    if file_ext == ".las" or file_ext == ".laz":
+        pipeline = pdal.Reader.las(filename=cloud_path).pipeline()
+    elif file_ext == ".ply":
+        pipeline = pdal.Reader.ply(filename=cloud_path).pipeline()
+    else:
+        raise ValueError(
+            f"Unsupported file format: {file_ext}. Supported formats are .las, .laz, and .ply"
+        )
     pipeline.execute()
     return pipeline.metadata
 
 
-def get_pdal_reader(las_path: str, epsg: str) -> pdal.Reader.las:
-    """Standard Reader.
+def get_pdal_reader(cloud_path: str, epsg: str):
+    """Get the appropriate PDAL reader based on file extension.
+
     Args:
-        las_path (str): input LAS path to read.
+        cloud_path (str): input point cloud file path (LAS or PLY).
         epsg (str): epsg to force the reading with
     Returns:
-        pdal.Reader.las: reader to use in a pipeline.
+        pdal.Reader: reader to use in a pipeline (Reader.las or Reader.ply).
 
     """
+    file_ext = Path(cloud_path).suffix.lower()
 
-    if epsg :
-        # if an epsg in provided, force pdal to read the lidar file with it
-        # epsg can be added as a number like "2154" or as a string like "EPSG:2154"
-        return pdal.Reader.las(
-            filename=las_path,
-            nosrs=True,
-            override_srs=f"EPSG:{epsg}" if str(epsg).isdigit() else epsg,
+    if file_ext == ".las" or file_ext == ".laz":
+        if epsg:
+            # if an epsg in provided, force pdal to read the lidar file with it
+            # epsg can be added as a number like "2154" or as a string like "EPSG:2154"
+            return pdal.Reader.las(
+                filename=cloud_path,
+                nosrs=True,
+                override_srs=f"EPSG:{epsg}" if str(epsg).isdigit() else epsg,
+            )
+
+        try:
+            if get_metadata(cloud_path)["metadata"]["readers.las"]["srs"]["compoundwkt"]:
+                # read the lidar file with pdal default
+                return pdal.Reader.las(filename=cloud_path)
+        except Exception:
+            pass  # we will go to the "raise exception" anyway
+
+        raise Exception("No EPSG provided, neither in the lidar file or as parameter")
+
+    elif file_ext == ".ply":
+        if epsg:
+            # if an epsg in provided, force pdal to read the point cloud file with it
+            # epsg can be added as a number like "2154" or as a string like "EPSG:2154"
+            return pdal.Reader.ply(
+                filename=cloud_path,
+                override_srs=f"EPSG:{epsg}" if str(epsg).isdigit() else epsg,
+            )
+        else:
+            # For PLY files, if no EPSG is provided, we still create a reader
+            # but the user should be aware that coordinates might not be in the correct CRS
+            return pdal.Reader.ply(filename=cloud_path)
+
+    else:
+        raise ValueError(
+            f"Unsupported file format: {file_ext}. Supported formats are .las, .laz, and .ply"
         )
-
-    try :
-        if get_metadata(las_path)['metadata']['readers.las']['srs']['compoundwkt']:
-            # read the lidar file with pdal default
-            return pdal.Reader.las(filename=las_path)
-    except Exception:
-        pass  # we will go to the "raise exception" anyway
-
-    raise Exception("No EPSG provided, neither in the lidar file or as parameter")
 
 
 def get_pdal_info_metadata(las_path: str) -> Dict:
@@ -124,17 +182,17 @@ def get_pdal_info_metadata(las_path: str) -> Dict:
 
 
 def split_cloud_into_samples(
-    las_path: str,
+    cloud_path: str,
     tile_width: Number,
     subtile_width: Number,
     epsg: str,
     subtile_overlap: Number = 0,
 ):
-    """Split LAS point cloud into samples.
+    """Split point cloud (LAS or PLY) into samples.
 
     Args:
-        las_path (str): path to raw LAS file
-        tile_width (Number): width of input LAS file
+        cloud_path (str): path to raw point cloud file (LAS or PLY)
+        tile_width (Number): width of input point cloud file
         subtile_width (Number): width of receptive field.
         epsg (str): epsg to force the reading with
         subtile_overlap (Number, optional): overlap between adjacent tiles. Defaults to 0.
@@ -143,7 +201,7 @@ def split_cloud_into_samples(
         _type_: idx_in_original_cloud, and points of sample in pdal input format casted as floats.
 
     """
-    points = pdal_read_las_array_as_float32(las_path, epsg)
+    points = pdal_read_point_cloud_array_as_float32(cloud_path, epsg)
     pos = np.asarray([points["X"], points["Y"], points["Z"]], dtype=np.float32).transpose()
     kd_tree = cKDTree(pos[:, :2] - pos[:, :2].min(axis=0))
     XYs = get_mosaic_of_centers(tile_width, subtile_width, subtile_overlap=subtile_overlap)

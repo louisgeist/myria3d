@@ -231,6 +231,23 @@ class TargetTransform(BaseTransform):
         d.update({65: 65})
         self.mapper = np.vectorize(lambda class_code: d.get(class_code))
 
+class TargetToOneHot(BaseTransform):
+    """Convert target to one-hot encoding."""
+    def __init__(self, num_classes: int):
+        self.num_classes = num_classes
+
+    def __call__(self, data):
+        return data
+    
+        # To one hot 
+        data.y = torch.nn.functional.one_hot(data.y, num_classes=self.num_classes+1)
+        
+        # Remove the void class
+        data.y = data.y[:,:-1]
+        
+        # Convert to float, for the loss function
+        data.y = data.y.float()
+        return data
 
 class DropPointsByClass(BaseTransform):
     """Drop points with class -1 (i.e. artefacts that would have been mapped to code -1)"""

@@ -44,7 +44,7 @@ class ModelMetrics(Callback):
             "f1": F1Score(task="multiclass", num_classes=self.num_classes, average=average),
             # DEBUG: checking that this iou matches the one from model.py before removing it
             "iou": JaccardIndex(
-                task="multiclass", num_classes=self.num_classes, average=average_iou
+                task="multiclass", num_classes=self.num_classes, average=average_iou, ignore_index=self.num_classes - 1
             ),
         }
 

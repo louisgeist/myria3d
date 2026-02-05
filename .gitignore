@@ -157,3 +157,7 @@ logs/
 wandb/
 .env
 .autoenv
+
+*.ply
+*.csv
+*.hdf5
