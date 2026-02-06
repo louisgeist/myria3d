@@ -137,12 +137,187 @@ class Flair3DRemapLabels(BaseTransform):
         
         self.mapped_to_device = False
         
+        ### ----- Finer Cosia --- ###
+        # https://imagine.enpc.fr/~louis.geist/80/label_definition.html
+        
+        
+        building = 0
+        greenhouse = 1
+        impervious_surface = 2
+        other_soil = 3
+        herbaceous = 4
+        vineyard = 5
+        tree = 6
+        brushwood = 7
+        void = 8
+
+        self.COSIA_finerall = torch.tensor([
+            building, # Building
+            greenhouse, # Greenhouse
+            void, # Swimming pool
+            impervious_surface, # Impervious surface
+            other_soil, # Pervious surface
+            other_soil, # Bare soil
+            void, # Water
+            void, # Snow
+            herbaceous, # Herbaceous vegetation
+            other_soil, # Agricultural land
+            other_soil, # Plowed land
+            vineyard, # Vineyard
+            tree, # Deciduous
+            tree, # Coniferous
+            brushwood, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        void = 4
+        self.COSIA_finerbuilding = torch.tensor([
+            self.BUILDING_COARSE_1, # Building
+            3, # Greenhouse
+            void, # Swimming pool
+            self.SOIL_COARSE_1, # Impervious surface
+            self.SOIL_COARSE_1, # Pervious surface
+            self.SOIL_COARSE_1, # Bare soil
+            void, # Water
+            void, # Snow
+            self.SOIL_COARSE_1, # Herbaceous vegetation
+            self.SOIL_COARSE_1, # Agricultural land
+            self.SOIL_COARSE_1, # Plowed land
+            self.VEGETATION_COARSE_1, # Vineyard
+            self.VEGETATION_COARSE_1, # Deciduous
+            self.VEGETATION_COARSE_1, # Coniferous
+            self.VEGETATION_COARSE_1, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        void = 5
+        other_soil = self.SOIL_COARSE_1 #1
+        impervious_surface = 3
+        herbaceous = 4
+        self.COSIA_finersoil = torch.tensor([
+            self.BUILDING_COARSE_1, # Building
+            self.BUILDING_COARSE_1, # Greenhouse
+            void, # Swimming pool
+            impervious_surface, # Impervious surface
+            other_soil, # Pervious surface
+            other_soil, # Bare soil
+            void, # Water
+            void, # Snow
+            herbaceous, # Herbaceous vegetation
+            other_soil, # Agricultural land
+            other_soil, # Plowed land
+            self.VEGETATION_COARSE_1, # Vineyard
+            self.VEGETATION_COARSE_1, # Deciduous
+            self.VEGETATION_COARSE_1, # Coniferous
+            self.VEGETATION_COARSE_1, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        void = 5
+        tree = self.VEGETATION_COARSE_1
+        vineyard = 3
+        brushwood = 4
+        self.COSIA_finervegetation = torch.tensor([
+            self.BUILDING_COARSE_1, # Building
+            self.BUILDING_COARSE_1, # Greenhouse
+            void, # Swimming pool
+            self.SOIL_COARSE_1, # Impervious surface
+            self.SOIL_COARSE_1, # Pervious surface
+            self.SOIL_COARSE_1, # Bare soil
+            void, # Water
+            void, # Snow
+            self.SOIL_COARSE_1, # Herbaceous vegetation
+            self.SOIL_COARSE_1, # Agricultural land
+            self.SOIL_COARSE_1, # Plowed land
+            vineyard, # Vineyard
+            tree, # Deciduous
+            tree, # Coniferous
+            brushwood, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        void=4
+        self.COSIA_finervegetationbeta = torch.tensor([
+            self.BUILDING_COARSE_1, # Building
+            self.BUILDING_COARSE_1, # Greenhouse
+            void, # Swimming pool
+            self.SOIL_COARSE_1, # Impervious surface
+            self.SOIL_COARSE_1, # Pervious surface
+            self.SOIL_COARSE_1, # Bare soil
+            void, # Water
+            void, # Snow
+            self.SOIL_COARSE_1, # Herbaceous vegetation
+            self.SOIL_COARSE_1, # Agricultural land
+            self.SOIL_COARSE_1, # Plowed land
+            vineyard, # Vineyard
+            tree, # Deciduous
+            tree, # Coniferous
+            void, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        
+        soil=0
+        # vegetation_low=1
+        vegetation_medium=1
+        vegetation_high=2
+        building=3
+        bridge=4
+        sursol_perenne=5
+        void=6
+        
+        
+        self.LIDARHD_finer = torch.tensor([
+            soil, # Soil
+            soil, # Végétation basse
+            vegetation_medium, # Végétation moyenne
+            vegetation_high, # Végétation haute
+            building, # Bâtiment
+            void, # Eau
+            bridge, # Pont
+            sursol_perenne, # Sursol pérenne
+            void, # Artefact
+            void, # Points virtuels (modélisation)
+            void,
+        ])
+        
+        
+        # self.COSIA_finerBuilding = self.COSIA_2_FLAIR3D.clone()
+        # mask_building = self.COSIA_2_FLAIR3D == self.BUILDING_COARSE_1
+        # self.COSIA_finerBuilding[mask_building] = \
+        #     self.COSIA_finerAll[mask_building] + self.FLAIR3D_COARSE_NUM_CLASSES
+        # self 
+            
+        # add self.FLAIR3D_COARSE_NUM_CLASSES for no collision
+        
         self.y_definition = y_definition
     
 
     _NO_REPR = ['mapped_to_device',
                 'COSIA_2_FLAIR3D_on_device', 
                 'LIDARHD_2_FLAIR3D_on_device', 
+                
+                'COSIA_finerall_on_device',
+                'COSIA_finerbuilding_on_device',
+                'COSIA_finersoil_on_device',
+                'COSIA_finervegetation_on_device',
+                'COSIA_finervegetationbeta_on_device',
+                'LIDARHD_finer_on_device',
                 
                 'DISAGREEMENT_COLORS_on_device', 
                 'DISAGREEMENT_COLORS_CLASS_OF_INTEREST_on_device',
@@ -151,7 +326,31 @@ class Flair3DRemapLabels(BaseTransform):
                 'DISAGREEMENT_COLORS_CLASS_OF_INTEREST',
                 ]
     
-    def __call__(self, data):
+    def map_to_device(self, device):
+        # We need the following tensors on the same device as data for
+        # the computation. If we moved them to GPU in place,
+        # they would be included in __repr__ (used for pre_transform_hash)
+        # and cause instability when computing the pretransform hash. So we
+        # use a separate <tensor_name>_on_device for the actual
+        # computation; which is in _NO_REPR and thus excluded from __repr__
+        # and from the hash.
+        if not self.mapped_to_device:
+            self.COSIA_finerall_on_device = self.COSIA_finerall.to(device)
+            self.COSIA_finerbuilding_on_device = self.COSIA_finerbuilding.to(device)
+            self.COSIA_finersoil_on_device = self.COSIA_finersoil.to(device)
+            self.COSIA_finervegetation_on_device = self.COSIA_finervegetation.to(device)
+            self.COSIA_finervegetationbeta_on_device = self.COSIA_finervegetationbeta.to(device)
+            self.LIDARHD_finer_on_device = self.LIDARHD_finer.to(device)
+            
+            self.COSIA_2_FLAIR3D_on_device = self.COSIA_2_FLAIR3D.to(device)
+            self.LIDARHD_2_FLAIR3D_on_device = self.LIDARHD_2_FLAIR3D.to(device)
+            self.DISAGREEMENT_COLORS_on_device = self.DISAGREEMENT_COLORS.to(device)
+            self.DISAGREEMENT_COLORS_CLASS_OF_INTEREST_on_device = \
+                self.DISAGREEMENT_COLORS_CLASS_OF_INTEREST.to(device)
+            
+            self.mapped_to_device = True
+    
+    def _process(self, data):
         """
         Remap the cosia and lidarhd labels to the coarse labels.
         
@@ -179,18 +378,26 @@ class Flair3DRemapLabels(BaseTransform):
         assert cosia_available and lidarhd_available, "cosia and lidarhd must be available to compute `y_fixed`."
         
         # Compute agreement mask
-        y_agreement_mask = (y_cosia_coarse_majority == y_lidarhd_coarse_majority).int()
-        data.y_agreement = self.remap(y_agreement_mask, self.DISAGREEMENT_COLORS_on_device)
+        y_agreement_mask = (y_cosia_coarse_majority == y_lidarhd_coarse_majority).bool()
+        data.y_agreement = self.remap(y_agreement_mask.int(), self.DISAGREEMENT_COLORS_on_device)
                 
         
         # Compute y_fixed
         if self.y_definition == 'coarse_lidarhd':
             y_fixed = y_lidarhd_coarse_majority.clone()
+            num_classes = self.FLAIR3D_COARSE_NUM_CLASSES
+            
+        elif self.y_definition == 'finer_lidarhd':
+            mapping = self.LIDARHD_finer_on_device
+            y_fixed = self.remap(data.y_lidarhd, mapping)
+            num_classes = mapping.max()
+            
         elif self.y_definition == 'coarse_cosia':
             y_fixed = y_cosia_coarse_majority.clone()
+            num_classes = self.FLAIR3D_COARSE_NUM_CLASSES
         elif self.y_definition == 'coarse_intersection':
         
-            
+            num_classes = self.FLAIR3D_COARSE_NUM_CLASSES
             y_fixed = self.FLAIR3D_COARSE_NUM_CLASSES * \
                 torch.ones_like(y_cosia_coarse_majority, dtype=torch.long)
             
@@ -210,24 +417,42 @@ class Flair3DRemapLabels(BaseTransform):
             
             y_fixed[mask & is_not_void] = y_lidarhd_coarse_majority[mask & is_not_void]
             
+        elif self.y_definition in ['inter_finerall', 
+                                   'inter_finerbuilding', 
+                                   'inter_finersoil', 
+                                   'inter_finervegetation',
+                                   'inter_finervegetation_beta']:
+            if self.y_definition == 'inter_finerall':
+                mapping = self.COSIA_finerall_on_device
+            elif self.y_definition == 'inter_finerbuilding':
+                mapping = self.COSIA_finerbuilding_on_device
+            elif self.y_definition == 'inter_finersoil':
+                mapping = self.COSIA_finersoil_on_device
+            elif self.y_definition == 'inter_finervegetation':
+                mapping = self.COSIA_finervegetation_on_device
+            elif self.y_definition == 'inter_finervegetation_beta':
+                mapping = self.COSIA_finervegetationbeta_on_device
+                
+            y_fixed, num_classes = self.inter_finer_remap(data.y_cosia, \
+                mapping, y_agreement_mask)
             
         else:
             raise ValueError(f"Invalid y_definition: {self.y_definition}")
         
         # to histogram
         to_histogram = False
-        if to_histogram:
+        if to_histogram and  y_fixed.dim() != 2:
             histogram = torch.zeros((y_fixed.shape[0], 
-                                    self.FLAIR3D_COARSE_NUM_CLASSES + 1), 
-                                    device=data.x.device,
+                                    num_classes + 1), 
+                                    device=data.device,
                                     dtype=torch.long)
             
             histogram[torch.arange(y_fixed.shape[0]), y_fixed] = 1
             y_fixed = histogram
-        data.y = y_fixed
+        data.y = y_fixed 
         
         # Disagreements focused on a class
-        class_of_interest = self.BUILDING_COARSE_1
+        class_of_interest = None #self.BUILDING_COARSE_1
         if class_of_interest is not None:
             
             agreements = (y_cosia_coarse_majority == class_of_interest) \
@@ -257,6 +482,26 @@ class Flair3DRemapLabels(BaseTransform):
             
         return data
     
+    def inter_finer_remap(self, y_cosia, mapping, y_agreement_mask):
+        # y_cosia is not the same shape depending on whether GridSampling3D 
+        # is before or after this transform, because GridSampling3D turns a 
+        # one-dimensional `y` into an histogram of labels.
+        cosia_finer = self.remap(y_cosia, mapping)
+        cosia_finer = cosia_finer if cosia_finer.dim() == 1 \
+            else cosia_finer.argmax(dim=1)
+            
+        # Initialize with void
+        num_classes = mapping.max()
+        y_fixed = num_classes * \
+            torch.ones_like(y_agreement_mask, dtype=torch.long)
+            
+        # We take finer label of cosia, if cosia and lidarhd agree on the 
+        # coarser level
+        y_fixed[y_agreement_mask] = cosia_finer[y_agreement_mask]
+            
+        return y_fixed, num_classes
+        
+    
     def remap(self, y, mapping): 
         if y.dim() == 1: # y is a list of labels (y in [0, C]^N)
             return mapping[y]
@@ -266,23 +511,6 @@ class Flair3DRemapLabels(BaseTransform):
         else:
             raise ValueError(f"Expected y.dim()=1 or y.dim()=2, got y.dim()={y.dim()} instead")
 
-    def map_to_device(self, device):
-        
-        # We need the following tensors on the same device as data for
-        # the computation. If we moved them to GPU in place,
-        # they would be included in __repr__ (used for pre_transform_hash)
-        # and cause instability when computing the pretransform hash. So we
-        # use a separate <tensor_name>_on_device for the actual
-        # computation; which is in _NO_REPR and thus excluded from __repr__
-        # and from the hash.
-        if not self.mapped_to_device:
-            self.COSIA_2_FLAIR3D_on_device = self.COSIA_2_FLAIR3D.to(device)
-            self.LIDARHD_2_FLAIR3D_on_device = self.LIDARHD_2_FLAIR3D.to(device)
-            self.DISAGREEMENT_COLORS_on_device = self.DISAGREEMENT_COLORS.to(device)
-            self.DISAGREEMENT_COLORS_CLASS_OF_INTEREST_on_device = \
-                self.DISAGREEMENT_COLORS_CLASS_OF_INTEREST.to(device)
-            
-            self.mapped_to_device = True
 
     @classmethod
     def histogram_to_onehot(cls, histogram): # to put in utils
