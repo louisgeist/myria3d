@@ -444,7 +444,7 @@ class Flair3DRemapLabels(BaseTransform):
         if to_histogram and  y_fixed.dim() != 2:
             histogram = torch.zeros((y_fixed.shape[0], 
                                     num_classes + 1), 
-                                    device=data.device,
+                                    device=data.x.device,
                                     dtype=torch.long)
             
             histogram[torch.arange(y_fixed.shape[0]), y_fixed] = 1
