@@ -1,0 +1,8 @@
+# @package _global_
+
+defaults:
+  - w80/base_w80.yaml
+
+datamodule:
+  split_csv_path: "${hydra:runtime.cwd}/tests/data/mini_flair3d_split.csv"
+  hdf5_file_path: "${hydra:runtime.cwd}/tests/data/mini_flair3d.hdf5"

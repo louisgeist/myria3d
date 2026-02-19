@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - w80/base_w80.yaml
+
+dataset_description:
+    classification_dict: {0: "Building", 1: "Greenhouse", 2: "Impervious surface", 3: "Other soil", 4: "Herbaceous", 5: "Vineyard", 6: "Tree", 7: "Brushwood",8: "Aerial Building", 9: "Void",}
+
+datamodule:
+  transforms:
+    preparations:
+
+      voxel: [0.5,0.5,0.1]
+      y_definition: inter_finerall5
+
+model:
+  num_classes: 10
+
+  criterion:
+    ignore_index: 9 # = num_classes_spt = num_classes_myria3d -1
+# dataset_description:
+#   num_classes: 9

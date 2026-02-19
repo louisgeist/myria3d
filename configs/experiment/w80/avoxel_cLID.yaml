@@ -1,0 +1,11 @@
+# @package _global_
+
+defaults:
+  - w80/base_w80.yaml
+
+datamodule:
+  transforms:
+    preparations:
+
+      voxel: [0.5,0.5,0.1]
+      y_definition: coarse_lidarhd
