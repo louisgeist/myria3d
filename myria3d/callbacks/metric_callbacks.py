@@ -19,6 +19,7 @@ class ModelMetrics(Callback):
 
     def __init__(self, num_classes=7):
         self.num_classes = num_classes
+        self.best_val_iou = 0.0
         self.metrics = {
             "train": self._metrics_factory(),
             "val": self._metrics_factory(),
@@ -68,6 +69,15 @@ class ModelMetrics(Callback):
                 on_step=False,
                 metric_attribute=metric_name_for_log,
             )
+            if phase == "val" and metric_name == "iou":
+                self.best_val_iou = max(self.best_val_iou, float(value))
+                self.log(
+                    "val/best_iou",
+                    self.best_val_iou,
+                    on_epoch=True,
+                    on_step=False,
+                    metric_attribute="val/best_iou",
+                )
             metric.reset()  # always reset state when using compute().
 
         class_names = pl_module.hparams.classification_dict.values()
