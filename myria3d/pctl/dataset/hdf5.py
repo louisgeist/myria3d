@@ -274,12 +274,14 @@ def create_hdf5(
                         dtype="f",
                         data=data.pos,
                     )
-                    hdf5_file.create_dataset(
-                        os.path.join(hdf5_path, "y"),
-                        data.y.shape,
-                        dtype="i",
-                        data=data.y,
-                    )
+                    for y_name in ["y", "y_cosia", "y_lidarhd"]:
+                        if getattr(data, y_name, None) is not None:
+                            hdf5_file.create_dataset(
+                                os.path.join(hdf5_path, y_name),
+                                data[y_name].shape,
+                                dtype="i",
+                                data=data[y_name],
+                            )
                     hdf5_file.create_dataset(
                         os.path.join(hdf5_path, "idx_in_original_cloud"),
                         sample_idx.shape,
