@@ -1,0 +1,122 @@
+# default preparations with grid sampling and random sampling.
+voxel: 0.25
+
+y_definition: coarse_lidarhd
+
+# All these transformations are applied on-the-fly
+
+train:
+  Flair3DToConsecutiveLabels:
+    _target_: myria3d.pctl.transforms.transforms_flair3d.Flair3DToConsecutiveLabels
+
+  Flair3DRemapLabels:
+    _target_: myria3d.pctl.transforms.transforms_flair3d.Flair3DRemapLabels
+    _args_:
+      - ${datamodule.transforms.preparations.y_definition}
+
+  DropPointsByClass:
+    _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
+
+  GridSampling:
+    _target_: torch_geometric.transforms.GridSampling
+    _args_:
+      - ${datamodule.transforms.preparations.voxel}
+  
+  MinimumNumNodes:
+    _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
+    _args_:
+      - 300
+
+  MaximumNumNodes:
+    _target_: myria3d.pctl.transforms.transforms.MaximumNumNodes
+    _args_:
+      - 40000
+
+  Center:
+    _target_: torch_geometric.transforms.Center
+  
+  TargetToOneHot:
+    _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
+    _args_:
+      - ${model.num_classes}
+
+eval:
+  Flair3DToConsecutiveLabels:
+    _target_: myria3d.pctl.transforms.transforms_flair3d.Flair3DToConsecutiveLabels
+
+  Flair3DRemapLabels:
+    _target_: myria3d.pctl.transforms.transforms_flair3d.Flair3DRemapLabels
+    _args_:
+      - ${datamodule.transforms.preparations.y_definition}
+
+  DropPointsByClass:
+    _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
+
+  CopyFullPos:
+    _target_: myria3d.pctl.transforms.transforms.CopyFullPos
+
+  CopyFullPreparedTargets:
+    _target_: myria3d.pctl.transforms.transforms.CopyFullPreparedTargets
+
+  GridSampling:
+    _target_: torch_geometric.transforms.GridSampling
+    _args_:
+      - ${datamodule.transforms.preparations.voxel}
+
+  MinimumNumNodes:
+    _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
+    _args_:
+      - 300
+
+  MaximumNumNodes:
+    _target_: myria3d.pctl.transforms.transforms.MaximumNumNodes
+    _args_:
+      - 40000
+
+  CopySampledPos:
+    _target_: myria3d.pctl.transforms.transforms.CopySampledPos
+
+  Center:
+    _target_: torch_geometric.transforms.Center
+    
+  TargetToOneHot:
+    _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
+    _args_:
+      - ${model.num_classes}
+
+
+predict:
+  Flair3DToConsecutiveLabels:
+    _target_: myria3d.pctl.transforms.transforms_flair3d.Flair3DToConsecutiveLabels
+
+  Flair3DRemapLabels:
+    _target_: myria3d.pctl.transforms.transforms_flair3d.Flair3DRemapLabels
+    _args_:
+      - ${datamodule.transforms.preparations.y_definition}
+  
+  DropPointsByClass:
+    _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
+
+  CopyFullPos:
+    _target_: myria3d.pctl.transforms.transforms.CopyFullPos
+
+  GridSampling:
+    _target_: torch_geometric.transforms.GridSampling
+    _args_:
+      - ${datamodule.transforms.preparations.voxel}
+
+  MinimumNumNodes:
+    _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
+    _args_:
+      - 300
+
+  MaximumNumNodes:
+    _target_: myria3d.pctl.transforms.transforms.MaximumNumNodes
+    _args_:
+      - 40000
+
+  CopySampledPos:
+    _target_: myria3d.pctl.transforms.transforms.CopySampledPos
+
+  Center:
+    _target_: torch_geometric.transforms.Center
