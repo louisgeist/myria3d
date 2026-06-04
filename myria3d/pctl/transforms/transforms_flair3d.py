@@ -122,6 +122,22 @@ class Flair3DRemapLabels(BaseTransform):
             self.FLAIR3D_COARSE_NUM_CLASSES,
         ])
         
+        # 16/02 : compared to before, vegetation moyenne is mapped to vegetation
+        # now
+        self.LIDARHD_2_COARSE_B = torch.tensor([
+            self.SOIL_COARSE_1, # Soil
+            self.SOIL_COARSE_1, # Végétation basse
+            self.VEGETATION_COARSE_1, # Végétation moyenne
+            self.VEGETATION_COARSE_1, # Végétation haute
+            self.BUILDING_COARSE_1, # Bâtiment
+            self.FLAIR3D_COARSE_NUM_CLASSES, # Eau
+            self.BUILDING_COARSE_1, # Pont
+            self.BUILDING_COARSE_1, # Sursol pérenne
+            self.FLAIR3D_COARSE_NUM_CLASSES, # Artefact
+            self.FLAIR3D_COARSE_NUM_CLASSES, # Points virtuels (modélisation)
+            self.FLAIR3D_COARSE_NUM_CLASSES,
+        ])
+        
         ### ---- Disagreements color mapping ---- ###
         self.DISAGREEMENT_COLORS = torch.tensor(
             [[1,0,0],  # red for disagreement
@@ -297,6 +313,139 @@ class Flair3DRemapLabels(BaseTransform):
         ])
         
         
+        building = 0
+        greenhouse = 1
+        impervious_surface = 2
+        other_soil = 3
+        herbaceous = 4
+        vineyard = 5
+        tree = 6
+        brushwood = 6
+        void = 7
+        
+        self.COSIA_finerall2 = torch.tensor([
+            building, # Building
+            greenhouse, # Greenhouse
+            void, # Swimming pool
+            impervious_surface, # Impervious surface
+            other_soil, # Pervious surface
+            other_soil, # Bare soil
+            void, # Water
+            void, # Snow
+            herbaceous, # Herbaceous vegetation
+            other_soil, # Agricultural land
+            other_soil, # Plowed land
+            vineyard, # Vineyard
+            tree, # Deciduous
+            tree, # Coniferous
+            tree, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        building = 0
+        greenhouse = 1
+        impervious_surface = 2
+        other_soil = 3
+        herbaceous = 4
+        vineyard = 5
+        tree = 6
+
+        void = 8 # +1, because of sursol perenne coming from LIDARHD labels
+        
+        # Compared to the COSIA_finerall2:
+        # Brushwood as void
+        self.COSIA_finerall3 = torch.tensor([
+            building, # Building
+            greenhouse, # Greenhouse
+            void, # Swimming pool
+            impervious_surface, # Impervious surface
+            other_soil, # Pervious surface
+            other_soil, # Bare soil
+            void, # Water
+            void, # Snow
+            herbaceous, # Herbaceous vegetation
+            other_soil, # Agricultural land
+            other_soil, # Plowed land
+            vineyard, # Vineyard
+            tree, # Deciduous
+            tree, # Coniferous
+            void, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        building = 0
+        greenhouse = 1
+        impervious_surface = 2
+        other_soil = 3
+        herbaceous = 4
+        vineyard = 5
+        tree = 6
+        brushwood = 7
+        sursol_perenne = 8 # forced based on LIDARHD labels
+        void = 9
+        self.COSIA_finerall5 = torch.tensor([
+            building, # Building
+            greenhouse, # Greenhouse
+            void, # Swimming pool
+            impervious_surface, # Impervious surface
+            other_soil, # Pervious surface
+            other_soil, # Bare soil
+            void, # Water
+            void, # Snow
+            herbaceous, # Herbaceous vegetation
+            other_soil, # Agricultural land
+            other_soil, # Plowed land
+            vineyard, # Vineyard
+            tree, # Deciduous
+            tree, # Coniferous
+            brushwood, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        building = 0
+        greenhouse = 1
+        impervious_surface = 2
+        other_soil = 3
+        herbaceous = 4
+        vineyard = 5
+        tree = 6
+        # brushwood = 7
+        sursol_perenne = 7 # forced based on LIDARHD labels
+        void = 8
+        # Compared to the COSIA_finerall5:
+        # Brushwood as tree (no more its own class)
+        self.COSIA_finerall6 = torch.tensor([
+            building, # Building
+            greenhouse, # Greenhouse
+            void, # Swimming pool
+            impervious_surface, # Impervious surface
+            other_soil, # Pervious surface
+            other_soil, # Bare soil
+            void, # Water
+            void, # Snow
+            herbaceous, # Herbaceous vegetation
+            other_soil, # Agricultural land
+            other_soil, # Plowed land
+            vineyard, # Vineyard
+            tree, # Deciduous
+            tree, # Coniferous
+            tree, # Brushwood
+            void, # Clear cut 
+            void, # Ligneous 
+            void, # Mixed
+            void, # Undefined
+        ])
+        
+        
         # self.COSIA_finerBuilding = self.COSIA_2_FLAIR3D.clone()
         # mask_building = self.COSIA_2_FLAIR3D == self.BUILDING_COARSE_1
         # self.COSIA_finerBuilding[mask_building] = \
@@ -341,6 +490,12 @@ class Flair3DRemapLabels(BaseTransform):
             self.COSIA_finervegetation_on_device = self.COSIA_finervegetation.to(device)
             self.COSIA_finervegetationbeta_on_device = self.COSIA_finervegetationbeta.to(device)
             self.LIDARHD_finer_on_device = self.LIDARHD_finer.to(device)
+            self.LIDARHD_2_COARSE_B_on_device = self.LIDARHD_2_COARSE_B.to(device)
+            
+            self.COSIA_finerall2_on_device = self.COSIA_finerall2.to(device)
+            self.COSIA_finerall3_on_device = self.COSIA_finerall3.to(device)
+            self.COSIA_finerall5_on_device = self.COSIA_finerall5.to(device)
+            self.COSIA_finerall6_on_device = self.COSIA_finerall6.to(device)
             
             self.COSIA_2_FLAIR3D_on_device = self.COSIA_2_FLAIR3D.to(device)
             self.LIDARHD_2_FLAIR3D_on_device = self.LIDARHD_2_FLAIR3D.to(device)
@@ -350,7 +505,7 @@ class Flair3DRemapLabels(BaseTransform):
             
             self.mapped_to_device = True
     
-    def _process(self, data):
+    def __call__(self, data):
         """
         Remap the cosia and lidarhd labels to the coarse labels.
         
@@ -435,7 +590,121 @@ class Flair3DRemapLabels(BaseTransform):
                 
             y_fixed, num_classes = self.inter_finer_remap(data.y_cosia, \
                 mapping, y_agreement_mask)
+
+        elif self.y_definition == 'inter_finerall3':
+            # 13/02/2026
+            y_fixed, num_classes = self.inter_finer_remap(data.y_cosia, \
+                self.COSIA_finerall3_on_device, y_agreement_mask)
             
+            # ---- Vineyard ----
+            # no matter the y_agreement_mask
+            vineyard_cosia_idx = 11
+            vineyard_finerall3_idx = 5
+            y_cosia_majority = self.histogram_to_onehot(data.y_cosia)
+            y_fixed[y_cosia_majority == vineyard_cosia_idx] = \
+                vineyard_finerall3_idx
+            
+            # ---- Sursol perenne ----
+            sursol_perenne_lidar_idx = 7
+            sursol_perenne_finerall3_idx = 7
+            y_lidarhd_majority = self.histogram_to_onehot(data.y_lidarhd)
+            y_fixed[y_lidarhd_majority == sursol_perenne_lidar_idx] = \
+                sursol_perenne_finerall3_idx
+        
+        elif self.y_definition == 'inter_finerall4':
+            # 13/02/2026
+            # Same as inter_finerall4, but we redefine the y_agreement_mask:
+            # if y_lidarhd was void, then now the agreement mask is True
+            
+            y_agreement_mask_void_agrees = y_agreement_mask.clone()
+            y_lidarhd_majority = self.histogram_to_onehot(data.y_lidarhd)
+            y_agreement_mask_void_agrees[y_lidarhd_majority == 10] = True
+            
+            # 13/02/2026
+            y_fixed, num_classes = self.inter_finer_remap(data.y_cosia, \
+                self.COSIA_finerall3_on_device, y_agreement_mask_void_agrees)
+            
+            # ---- Vineyard ----
+            # no matter the y_agreement_mask
+            vineyard_cosia_idx = 11
+            vineyard_finerall3_idx = 5
+            y_cosia_majority = self.histogram_to_onehot(data.y_cosia)
+            y_fixed[y_cosia_majority == vineyard_cosia_idx] = \
+                vineyard_finerall3_idx
+            
+            # ---- Sursol perenne ----
+            sursol_perenne_lidar_idx = 7
+            sursol_perenne_finerall3_idx = 7
+            y_lidarhd_majority = self.histogram_to_onehot(data.y_lidarhd)
+            y_fixed[y_lidarhd_majority == sursol_perenne_lidar_idx] = \
+                sursol_perenne_finerall3_idx
+
+        elif self.y_definition == 'inter_finerall5':
+            # Redo what is done in the begin of the function, but with 
+            # `LIDARHD_2_COARSE_B` instead of `LIDARHD_2_FLAIR3D`
+            data.y_lidarhd_coarse = self.remap(data.y_lidarhd, self.LIDARHD_2_COARSE_B_on_device)
+            y_lidarhd_coarse_majority = self.histogram_to_onehot(data.y_lidarhd_coarse)
+            
+            y_agreement_mask = (y_cosia_coarse_majority == y_lidarhd_coarse_majority).bool()
+            data.y_agreement = self.remap(y_agreement_mask.int(), self.DISAGREEMENT_COLORS_on_device)
+            
+            # As `inter_finerall3`
+            y_agreement_mask_void_agrees = y_agreement_mask.clone()
+            y_lidarhd_majority = self.histogram_to_onehot(data.y_lidarhd)
+            y_agreement_mask_void_agrees[y_lidarhd_majority == 10] = True
+            
+            y_fixed, num_classes = self.inter_finer_remap(data.y_cosia, \
+                self.COSIA_finerall5_on_device, y_agreement_mask_void_agrees)
+            
+            # in inter_finerall5 : we don't force anymore the vineyard
+            # # ---- Vineyard ----
+            # # no matter the y_agreement_mask
+            # vineyard_cosia_idx = 11
+            # vineyard_finerall3_idx = 5
+            # y_cosia_majority = self.histogram_to_onehot(data.y_cosia)
+            # y_fixed[y_cosia_majority == vineyard_cosia_idx] = \
+            #     vineyard_finerall3_idx
+                
+            # ---- Sursol perenne ----
+            sursol_perenne_lidar_idx = 7
+            sursol_perenne_finerall5_idx = 8
+            y_lidarhd_majority = self.histogram_to_onehot(data.y_lidarhd)
+            y_fixed[y_lidarhd_majority == sursol_perenne_lidar_idx] = \
+                sursol_perenne_finerall5_idx
+        
+        elif self.y_definition == 'inter_finerall6':
+            # Redo what is done in the begin of the function, but with 
+            # `LIDARHD_2_COARSE_B` instead of `LIDARHD_2_FLAIR3D`
+            data.y_lidarhd_coarse = self.remap(data.y_lidarhd, self.LIDARHD_2_COARSE_B_on_device)
+            y_lidarhd_coarse_majority = self.histogram_to_onehot(data.y_lidarhd_coarse)
+            
+            y_agreement_mask = (y_cosia_coarse_majority == y_lidarhd_coarse_majority).bool()
+            data.y_agreement = self.remap(y_agreement_mask.int(), self.DISAGREEMENT_COLORS_on_device)
+            
+            # As `inter_finerall3`
+            y_agreement_mask_void_agrees = y_agreement_mask.clone()
+            y_lidarhd_majority = self.histogram_to_onehot(data.y_lidarhd)
+            y_agreement_mask_void_agrees[y_lidarhd_majority == 10] = True
+            
+            y_fixed, num_classes = self.inter_finer_remap(data.y_cosia, \
+                self.COSIA_finerall6_on_device, y_agreement_mask_void_agrees)
+            
+            # in inter_finerall5 : we don't force anymore the vineyard
+            # # ---- Vineyard ----
+            # # no matter the y_agreement_mask
+            # vineyard_cosia_idx = 11
+            # vineyard_finerall3_idx = 5
+            # y_cosia_majority = self.histogram_to_onehot(data.y_cosia)
+            # y_fixed[y_cosia_majority == vineyard_cosia_idx] = \
+            #     vineyard_finerall3_idx
+                
+            # ---- Sursol perenne ----
+            sursol_perenne_lidar_idx = 7
+            sursol_perenne_finerall6_idx = 7
+            y_lidarhd_majority = self.histogram_to_onehot(data.y_lidarhd)
+            y_fixed[y_lidarhd_majority == sursol_perenne_lidar_idx] = \
+                sursol_perenne_finerall6_idx
+                
         else:
             raise ValueError(f"Invalid y_definition: {self.y_definition}")
         
