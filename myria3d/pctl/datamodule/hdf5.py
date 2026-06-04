@@ -226,3 +226,31 @@ class HDF5LidarDataModule(LightningDataModule):
 
         # Showing the above plot
         plt.show()
+
+
+from myria3d.pctl.dataset.flair3d import FLAIR3DDataset
+class Flair3DDatamodule(HDF5LidarDataModule):
+    """Datamodule to feed train and validation data to the model."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @property
+    def dataset(self) -> FLAIR3DDataset:
+    
+        if self._dataset:
+            return self._dataset
+
+        self._dataset = FLAIR3DDataset(
+            self.hdf5_file_path,
+            self.epsg,
+            las_paths_by_split_dict=self.las_paths_by_split_dict,
+            points_pre_transform=self.points_pre_transform,
+            tile_width=self.tile_width,
+            subtile_width=self.subtile_width,
+            subtile_overlap_train=self.subtile_overlap_train,
+            pre_filter=self.pre_filter,
+            train_transform=self.train_transform,
+            eval_transform=self.eval_transform,
+        )
+        return self._dataset

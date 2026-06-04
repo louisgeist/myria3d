@@ -35,6 +35,26 @@ class FLAIR3DDataset(HDF5Dataset):
     def __getitem__(self, idx: int) -> Optional[Data]:
         return super().__getitem__(idx)
     
+    
+    def _get_data(self, sample_hdf5_path: str) -> Data:
+        if self.dataset is None:
+            self.dataset = h5py.File(self.hdf5_file_path, "r")
+
+        grp = self.dataset[sample_hdf5_path]
+        # [...] needed to make a copy of content and avoid closing HDF5.
+        # Nota: idx_in_original_cloud SHOULD be np.ndarray, in order to be batched into a list,
+        # which serves to keep track of indivual sample sizes in a simpler way for interpolation.
+        return Data(
+            x=torch.from_numpy(grp["x"][...]),
+            pos=torch.from_numpy(grp["pos"][...]),
+            y_cosia=torch.from_numpy(grp["y_cosia"][...]),
+            y_lidarhd=torch.from_numpy(grp["y_lidarhd"][...]),
+            idx_in_original_cloud=grp["idx_in_original_cloud"][...],
+            x_features_names=grp["x"].attrs["x_features_names"].tolist(),
+            # num_nodes=grp["pos"][...].shape[0],  # Not needed - performed under the hood.
+        )
+
+    
 RAW_DIR = "/data/geist/superpixel_transformer_dev/data/flair3d/raw"
     
 RAW_FOLDER_NAMES = {
@@ -169,11 +189,13 @@ def flair3d_pre_transform(points):
     x = np.stack(x_list, axis=0).transpose()
     
     # Semantic
-    y = points["cosia_class"].astype(np.float32)
+    y_cosia = points["cosia_class"].astype(np.float32)
+    y_lidarhd = points["lidarhd_class"].astype(np.float32)
     
     data = Data(pos=pos,
                 x=x,
-                y=y,
+                y_cosia=y_cosia,
+                y_lidarhd=y_lidarhd,
                 x_features_names=x_features_names)
     
     return data
