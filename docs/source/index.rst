@@ -13,6 +13,7 @@ Myria3D > Documentation
    tutorials/install_on_linux
    tutorials/install_on_wsl2
    tutorials/prepare_dataset
+   tutorials/flair3d_plus
    tutorials/make_predictions
 
 

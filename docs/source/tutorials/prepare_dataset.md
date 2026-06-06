@@ -31,7 +31,7 @@ After division, the smaller clouds are preprocessed (i.e. selection of specific 
 
 The HDF5 dataset is created at training time. It should only happens once. Once this is done, you do not need sources anymore, and simply specifying the path to the HDF5 dataset is enough (there is no need for data_dir or split_csv_path parameters anymore).
 
-It's also possible to create the hdf5 file without training any model: just fill the `datamodule.hdf5_file_path` parameter as before to specify the file path, but use `task=create_hdf5` instead of `task=fit`.
+It's also possible to create the hdf5 file without training any model: just fill the `datamodule.hdf5_file_path` parameter as before to specify the file path, but use `task.task_name=create_hdf5` instead of `task.task_name=fit`.
 
 
 ## Getting started quickly with a toy dataset
