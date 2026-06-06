@@ -1,0 +1,50 @@
+# @package _global_
+
+defaults:
+  - override /model: pyg_randla_net_model.yaml
+  - override /datamodule/transforms/augmentations: light.yaml
+  - override /logger: wandb.yaml
+  - override /dataset_description: flair3d_plus_v12.yaml
+  - override /datamodule/transforms/preparations: points_budget_flair3d_plus.yaml
+
+model:
+  num_classes: 16
+  criterion:
+    ignore_index: 15
+  monitor: "val/iou"
+
+callbacks:
+  model_checkpoint:
+    monitor: ${model.monitor}
+    mode: "max"
+
+  early_stopping:
+    monitor: ${model.monitor}
+    mode: "max"
+
+logger:
+  wandb:
+    name: >
+      RandLaNet | Flair3D+ v12 | voxel=${datamodule.transforms.preparations.voxel}
+
+trainer:
+  min_epochs: 100
+  max_epochs: 150
+  num_sanity_val_steps: 2
+  accelerator: gpu
+
+datamodule:
+  _target_: myria3d.pctl.datamodule.hdf5.Flair3DDatamodule
+  batch_size: 12
+  num_workers: 2
+  data_dir: "."
+  split_csv_path: "${hydra:runtime.cwd}/tests/data/flair3d_plus_split.csv"
+  hdf5_file_path: "${hydra:runtime.cwd}/tests/data/flair3d_plus_v12.hdf5"
+  epsg: "2154"
+
+  points_pre_transform:
+    _target_: functools.partial
+    _args_:
+      - "${get_method:myria3d.pctl.dataset.flair3d.flair3d_plus_pre_transform}"
+
+  tile_width: 100

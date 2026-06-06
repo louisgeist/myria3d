@@ -1,30 +1,148 @@
-import copy
+import argparse
+import csv
 import os
 import os.path as osp
-from numbers import Number
-from typing import Callable, List, Optional
+from dataclasses import dataclass
+from typing import List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from numpy.lib.recfunctions import append_fields
 import h5py
 import torch
-from torch.utils.data import Dataset
 from torch_geometric.data import Data
-from tqdm import tqdm
 import pandas as pd
-
-from myria3d.pctl.dataset.utils import (
-    LAS_PATHS_BY_SPLIT_DICT_TYPE,
-    SPLIT_TYPE,
-    pre_filter_below_n_points,
-    split_cloud_into_samples,
-)
 from myria3d.pctl.points_pre_transform.lidar_hd import lidar_hd_pre_transform
 from myria3d.utils import utils
 
 log = utils.get_logger(__name__)
 
 from myria3d.pctl.dataset.hdf5 import HDF5Dataset
+
+
+def _parse_csv_bool(raw: str) -> bool:
+    token = (raw or "").strip().lower()
+    return token in ("true", "1", "yes")
+
+
+def build_ply_path(labels_root: str, dept_year: str, roi: str, scene_i_j: str) -> str:
+    """Resolve a Flair3D-build output PLY path (label=v12 layout)."""
+    ply_filename = f"{dept_year}_LIDARHD_{roi}_{scene_i_j}.ply"
+    return osp.abspath(
+        osp.join(labels_root, "LIDARHD", f"{dept_year}_LIDARHD", roi, ply_filename)
+    )
+
+
+def load_excluded_tiles_from_details_csv(
+    csv_path: Optional[str],
+) -> Set[Tuple[str, str]]:
+    """Load (split, patch_id) tiles to exclude (reason=missing_coord_file)."""
+    if not csv_path:
+        return set()
+    if not osp.isfile(csv_path):
+        log.warning(
+            "Excluded tiles details CSV not found: %s. Continuing with empty excluded set.",
+            csv_path,
+        )
+        return set()
+
+    excluded: Set[Tuple[str, str]] = set()
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row.get("reason") != "missing_coord_file":
+                continue
+            split = (row.get("split") or "").strip().lower()
+            patch_id = (row.get("patch_id") or "").strip()
+            if split and patch_id:
+                excluded.add((split, patch_id))
+    return excluded
+
+
+@dataclass(frozen=True)
+class ManifestPatch:
+    split: str
+    dept_year: str
+    roi: str
+    scene_i_j: str
+    patch_id: str
+
+
+def load_manifest_patches(
+    split_manifest_csv: str,
+    splits: Sequence[str] = ("train", "val", "test"),
+) -> List[ManifestPatch]:
+    """Load scene_split_manifest.csv rows with LIDARHD=True (one row per patch_id)."""
+    if not osp.isfile(split_manifest_csv):
+        raise FileNotFoundError(f"Split manifest CSV not found: {split_manifest_csv}")
+
+    splits_set = set(splits)
+    patches_by_id: dict[str, ManifestPatch] = {}
+
+    with open(split_manifest_csv, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            split = (row.get("split") or "").strip().lower()
+            dept_year = (row.get("dept_year") or "").strip()
+            roi = (row.get("roi") or "").strip()
+            scene_i_j = (row.get("scene_i_j") or "").strip()
+            patch_id = (row.get("patch_id") or "").strip()
+
+            if not split or not dept_year or not roi or not scene_i_j or not patch_id:
+                continue
+            if split not in splits_set:
+                continue
+            if not _parse_csv_bool(row.get("LIDARHD", "")):
+                continue
+
+            if patch_id not in patches_by_id:
+                patches_by_id[patch_id] = ManifestPatch(
+                    split=split,
+                    dept_year=dept_year,
+                    roi=roi,
+                    scene_i_j=scene_i_j,
+                    patch_id=patch_id,
+                )
+
+    return list(patches_by_id.values())
+
+
+def manifest_to_split_csv(
+    split_manifest_csv: str,
+    labels_root: str,
+    output_csv: str,
+    excluded_tiles_details_csv: Optional[str] = None,
+    splits: Sequence[str] = ("train", "val", "test"),
+    require_existing_ply: bool = False,
+) -> int:
+    """Build basename,split CSV with absolute paths to Flair3D-build PLY files."""
+    patches = load_manifest_patches(split_manifest_csv, splits=splits)
+    excluded = load_excluded_tiles_from_details_csv(excluded_tiles_details_csv)
+
+    rows = []
+    skipped_excluded = 0
+    skipped_missing = 0
+    for patch in patches:
+        if (patch.split, patch.patch_id) in excluded:
+            skipped_excluded += 1
+            continue
+        ply_path = build_ply_path(
+            labels_root, patch.dept_year, patch.roi, patch.scene_i_j
+        )
+        if require_existing_ply and not osp.isfile(ply_path):
+            skipped_missing += 1
+            continue
+        rows.append({"basename": ply_path, "split": patch.split})
+
+    os.makedirs(osp.dirname(osp.abspath(output_csv)) or ".", exist_ok=True)
+    pd.DataFrame(rows).to_csv(output_csv, index=False)
+    summary = (
+        f"Split CSV saved to {output_csv} "
+        f"({len(rows)} patches, {skipped_excluded} excluded, {skipped_missing} missing PLY)"
+    )
+    log.info(summary)
+    print(summary)
+    return len(rows)
+
 
 class FLAIR3DDataset(HDF5Dataset):
     """Dataset for FLAIR3D dataset."""
@@ -34,139 +152,53 @@ class FLAIR3DDataset(HDF5Dataset):
 
     def __getitem__(self, idx: int) -> Optional[Data]:
         return super().__getitem__(idx)
-    
-    
+
     def _get_data(self, sample_hdf5_path: str) -> Data:
         if self.dataset is None:
             self.dataset = h5py.File(self.hdf5_file_path, "r")
 
         grp = self.dataset[sample_hdf5_path]
-        # [...] needed to make a copy of content and avoid closing HDF5.
-        # Nota: idx_in_original_cloud SHOULD be np.ndarray, in order to be batched into a list,
-        # which serves to keep track of indivual sample sizes in a simpler way for interpolation.
-        return Data(
+        kwargs = dict(
             x=torch.from_numpy(grp["x"][...]),
             pos=torch.from_numpy(grp["pos"][...]),
-            y_cosia=torch.from_numpy(grp["y_cosia"][...]),
-            y_lidarhd=torch.from_numpy(grp["y_lidarhd"][...]),
             idx_in_original_cloud=grp["idx_in_original_cloud"][...],
             x_features_names=grp["x"].attrs["x_features_names"].tolist(),
-            # num_nodes=grp["pos"][...].shape[0],  # Not needed - performed under the hood.
         )
-
-    
-RAW_DIR = "/data/geist/superpixel_transformer_dev/data/flair3d/raw"
-    
-RAW_FOLDER_NAMES = {
-    'train': [
-        # 'D005-2018_LIDARHD/AA-S1-14',
-        'D006-2020_LIDARHD/AU-S2-13',
-        'D009-2019_LIDARHD/AA-S1-14',
-        'D013-2020_LIDARHD/AA-S1-14',
-        'D015-2020_LIDARHD/AA-S1-11',
-        'D023-2020_LIDARHD/AA-S1-23',
-        # 'D033-2021_LIDARHD/AA-S1-1',
-        'D034-2021_LIDARHD/AA-S1-27',
-        'D035-2020_LIDARHD/AA-S1-37',
-        'D036-2020_LIDARHD/AA-S1-14',
-        'D038-2021_LIDARHD/FA-S1-18',
-        'D041-2021_LIDARHD/AA-S1-24',
-        'D052-2019_LIDARHD/AA-S1-28',
-        'D058-2020_LIDARHD/AA-S1-17',
-        # 'D060-2021_LIDARHD/AA-S1-40',
-        'D064-2021_LIDARHD/AA-S1-26',
-        'D069-2020_LIDARHD/AA-S1-28',
-        'D070-2020_LIDARHD/FA-S1-18',
-        # 'D072-2019_LIDARHD/AA-S1-15',
-        'D074-2020_LIDARHD/AA-S1-47',
-        'D080-2017_LIDARHD/UU-S1-25',
-        'D081-2020_LIDARHD/AA-S1-13',
-        # 'D084-2021_LIDARHD/AA-S1-21',
-        ],
-    'val': [
-        'D060-2021_LIDARHD/AA-S1-40',
-        'D072-2019_LIDARHD/AA-S1-15',
-        ],
-    'test': [
-        'D005-2018_LIDARHD/AA-S1-14',
-        'D033-2021_LIDARHD/AA-S1-1',
-        'D084-2021_LIDARHD/AA-S1-21',
-        ]
-} 
-    
-def construct_las_paths_by_split_dict(raw_dir, raw_folder_names):
-    las_paths_by_split_dict = {}
-    
-    for split, folder_names in raw_folder_names.items():
-        # Retrieve the available files.
-        paths = []
-        
-        for folder_name in folder_names:
-            folder_path = os.path.join(raw_dir, folder_name)
-            filenames = os.listdir(folder_path)
-            # Construct full paths by joining folder path with each filename
-            full_paths = [os.path.join(folder_path, filename) for filename in filenames]
-            paths.extend(full_paths)
-        
-        # Add to the output dictionary
-        las_paths_by_split_dict[split] = paths
-        
-        
-    return las_paths_by_split_dict
+        if "y" in grp:
+            y = torch.from_numpy(grp["y"][...]).long()
+            # Flair3D-build v12: invalid semantic ids (-1) → Void (15, ignore_index).
+            y[y < 0] = 15
+            kwargs["y"] = y
+        if "y_cosia" in grp:
+            kwargs["y_cosia"] = torch.from_numpy(grp["y_cosia"][...])
+        if "y_lidarhd" in grp:
+            kwargs["y_lidarhd"] = torch.from_numpy(grp["y_lidarhd"][...])
+        return Data(**kwargs)
 
 
-from myria3d.pctl.points_pre_transform.lidar_hd import lidar_hd_pre_transform
-
-def oldflair3d_pre_transform(points):
-    # Add ReturnNumber field if it doesn't exist (for PLY files that don't have this LAS-specific field)
-    if "ReturnNumber" not in points.dtype.names:
-        return_number = np.ones(points.shape[0], dtype=np.float32)
-        points = append_fields(points, "ReturnNumber", return_number, dtypes=np.float32, usemask=False)
+def _get_xyz(points) -> np.ndarray:
+    """Read point coordinates from LAS (X,Y,Z) or Flair3D-build PLY (x,y,z)."""
+    if all(c in points.dtype.names for c in ["X", "Y", "Z"]):
+        axes = ["X", "Y", "Z"]
+    elif all(c in points.dtype.names for c in ["x", "y", "z"]):
+        axes = ["x", "y", "z"]
     else:
-        # If it exists, ensure it's float32
-        points["ReturnNumber"] = points["ReturnNumber"].astype(np.float32)
-    
-    
-    # Add NumberOfReturns field if it doesn't exist
-    if "NumberOfReturns" not in points.dtype.names:
-        number_of_returns = np.ones(points.shape[0], dtype=np.float32)
-        points = append_fields(points, "NumberOfReturns", number_of_returns, dtypes=np.float32, usemask=False)
-    else:
-        # If it exists, ensure it's float32
-        points["NumberOfReturns"] = points["NumberOfReturns"].astype(np.float32)
-    
-    # # Add Classification field if it doesn't exist (use lidarhd_class if available, otherwise 0)
-    if "Classification" not in points.dtype.names:
-        if "lidarhd_class" in points.dtype.names:
-            classification = points["lidarhd_class"].astype(np.int32)
-        else:
-            print("No lidarhd_class found, using 0")
-            classification = np.zeros(points.shape[0], dtype=np.int32)
-        points = append_fields(points, "Classification", classification, dtypes=np.int32, usemask=False)
-    else:
-        # If it exists, ensure it's int32
-        points["Classification"] = points["Classification"].astype(np.int32)
-        
-    # Add infrared
-    if "Infrared" not in points.dtype.names:
-        infrared = points['Intensity']
-        points = append_fields(points, "Infrared", infrared, dtypes=np.float32, usemask=False)
-    else:
-        # If it exists, ensure it's float32
-        points["Infrared"] = points["Infrared"].astype(np.float32)
-    
-    return lidar_hd_pre_transform(points)
+        raise KeyError(
+            "Point cloud must contain X/Y/Z or x/y/z fields. "
+            f"Available: {points.dtype.names}"
+        )
+    return np.asarray([points[a] for a in axes], dtype=np.float32).transpose()
 
-def flair3d_pre_transform(points):
-    pos = np.asarray([points["X"], points["Y"], points["Z"]], dtype=np.float32).transpose()
-    
-    # Intensity
-    intensity = np.array(points['Intensity'], 
-                         dtype=np.float32
-                        ).clip(min=0, max=60000) / 60000
-    points["Intensity"] = intensity
-    
-    # Additional features
+
+def _flair3d_feature_tensors(points) -> Tuple[np.ndarray, List[str]]:
+    """Build feature matrix and names (shared by flair3d and flair3d_plus pre_transforms)."""
+    if "Intensity" in points.dtype.names:
+        intensity = np.array(points["Intensity"], dtype=np.float32).clip(
+            min=0, max=60000
+        ) / 60000
+    else:
+        intensity = np.zeros(points.shape[0], dtype=np.float32)
+
     rgb_avg = np.zeros(points.shape[0], dtype=np.float32)
     if all(c in points.dtype.names for c in ["Red", "Green", "Blue"]):
         rgb_avg = (
@@ -174,64 +206,128 @@ def flair3d_pre_transform(points):
             .transpose()
             .mean(axis=1)
         )
-    
+
     x_list = [intensity]
     x_features_names = ["Intensity"]
-    
+
     for color in ["Red", "Green", "Blue", "Infrared"]:
         if color in points.dtype.names:
-            x_list.append(points[color])
+            x_list.append(np.asarray(points[color], dtype=np.float32))
             x_features_names.append(color)
 
-    x_list += [rgb_avg,]
-    x_features_names += ["rgb_avg",]
+    x_list.append(rgb_avg)
+    x_features_names.append("rgb_avg")
 
     x = np.stack(x_list, axis=0).transpose()
-    
-    # Semantic
+    return x, x_features_names
+
+
+def oldflair3d_pre_transform(points):
+    if "ReturnNumber" not in points.dtype.names:
+        return_number = np.ones(points.shape[0], dtype=np.float32)
+        points = append_fields(points, "ReturnNumber", return_number, dtypes=np.float32, usemask=False)
+    else:
+        points["ReturnNumber"] = points["ReturnNumber"].astype(np.float32)
+
+    if "NumberOfReturns" not in points.dtype.names:
+        number_of_returns = np.ones(points.shape[0], dtype=np.float32)
+        points = append_fields(
+            points, "NumberOfReturns", number_of_returns, dtypes=np.float32, usemask=False
+        )
+    else:
+        points["NumberOfReturns"] = points["NumberOfReturns"].astype(np.float32)
+
+    if "Classification" not in points.dtype.names:
+        if "lidarhd_class" in points.dtype.names:
+            classification = points["lidarhd_class"].astype(np.int32)
+        else:
+            print("No lidarhd_class found, using 0")
+            classification = np.zeros(points.shape[0], dtype=np.int32)
+        points = append_fields(
+            points, "Classification", classification, dtypes=np.int32, usemask=False
+        )
+    else:
+        points["Classification"] = points["Classification"].astype(np.int32)
+
+    if "Infrared" not in points.dtype.names:
+        infrared = points["Intensity"]
+        points = append_fields(points, "Infrared", infrared, dtypes=np.float32, usemask=False)
+    else:
+        points["Infrared"] = points["Infrared"].astype(np.float32)
+
+    return lidar_hd_pre_transform(points)
+
+
+def flair3d_pre_transform(points):
+    pos = _get_xyz(points)
+
+    x, x_features_names = _flair3d_feature_tensors(points)
+
     y_cosia = points["cosia_class"].astype(np.float32)
     y_lidarhd = points["lidarhd_class"].astype(np.float32)
-    
-    data = Data(pos=pos,
-                x=x,
-                y_cosia=y_cosia,
-                y_lidarhd=y_lidarhd,
-                x_features_names=x_features_names)
-    
-    return data
 
-def save_split_csv(las_paths_by_split_dict: dict, output_path: str):
-    """Save a split CSV file from a las_paths_by_split_dict.
-    
-    Args:
-        las_paths_by_split_dict: Dictionary with keys 'train', 'val', 'test' and values being lists of file paths
-        output_path: Path where to save the CSV file
-    """
-    rows = []
-    for split, paths in las_paths_by_split_dict.items():
-        for path in paths:
-            rows.append({"basename": path, "split": split})
-    
-    df = pd.DataFrame(rows)
-    df.to_csv(output_path, index=False)
-    log.info(f"Split CSV saved to {output_path}")
-    print(f"Split CSV saved to {output_path}")
+    return Data(
+        pos=pos,
+        x=x,
+        y_cosia=y_cosia,
+        y_lidarhd=y_lidarhd,
+        x_features_names=x_features_names,
+    )
+
+
+def flair3d_plus_pre_transform(points):
+    """Load Flair3D-build output PLY with precomputed ``semantic`` labels (v12)."""
+    if "semantic" not in points.dtype.names:
+        raise KeyError(
+            "Field 'semantic' not found in PLY. Run Flair3D-build (label=v12) on this patch first. "
+            f"Available fields: {points.dtype.names}"
+        )
+
+    pos = _get_xyz(points)
+    x, x_features_names = _flair3d_feature_tensors(points)
+    y = np.asarray(points["semantic"], dtype=np.float32)
+
+    return Data(pos=pos, x=x, y=y, x_features_names=x_features_names)
+
+
+def _cli_manifest_to_split():
+    parser = argparse.ArgumentParser(
+        description="Build myria3d split CSV from Flair3D+ scene_split_manifest.csv"
+    )
+    parser.add_argument(
+        "--split-manifest-csv",
+        required=True,
+        help="Path to scene_split_manifest.csv",
+    )
+    parser.add_argument(
+        "--labels-root",
+        required=True,
+        help="Flair3D-build output_root (directory containing LIDARHD/)",
+    )
+    parser.add_argument(
+        "--output-csv",
+        required=True,
+        help="Output path for basename,split CSV",
+    )
+    parser.add_argument(
+        "--excluded-tiles-details-csv",
+        default=None,
+        help="Optional missing_coord_tiles.details.csv",
+    )
+    parser.add_argument(
+        "--require-existing-ply",
+        action="store_true",
+        help="Skip patches whose built PLY file is not on disk",
+    )
+    args = parser.parse_args()
+    manifest_to_split_csv(
+        args.split_manifest_csv,
+        args.labels_root,
+        args.output_csv,
+        excluded_tiles_details_csv=args.excluded_tiles_details_csv,
+        require_existing_ply=args.require_existing_ply,
+    )
+
 
 if __name__ == "__main__":
-    
-    las_paths_by_split_dict = construct_las_paths_by_split_dict(RAW_DIR, RAW_FOLDER_NAMES)
-    save_split_csv(las_paths_by_split_dict, "tests/data/flair3d_split.csv")
-    
-    mini_las_paths_by_split_dict = {k: v[:1] for k, v in las_paths_by_split_dict.items()}
-    
-    # Save the split CSV
-    split_csv_path = "tests/data/mini_flair3d_split.csv"
-    save_split_csv(mini_las_paths_by_split_dict, split_csv_path)
-    
-    # dataset = FLAIR3DDataset(
-    #     las_paths_by_split_dict=mini_las_paths_by_split_dict,
-    #     hdf5_file_path="tests/data/mini_flair3d.hdf5",
-    #     points_pre_transform=flair3d_pre_transform,
-    #     epsg="2154",
-    # )
-    # print(dataset[0])
+    _cli_manifest_to_split()
