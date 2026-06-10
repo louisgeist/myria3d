@@ -15,7 +15,6 @@
 #SBATCH --job-name=myria3d
 #SBATCH --time=16:00:00
 
-set -euo pipefail
 
 JOB_DIR=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs/slurm/${SLURM_JOB_ID}
 mkdir -p ${JOB_DIR}
@@ -38,6 +37,8 @@ module load miniforge/24.9.0
 
 conda activate myria3d
 
+
+set -euo pipefail
 
 conda list > ${JOB_DIR}/conda_env.txt
 
