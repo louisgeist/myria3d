@@ -42,6 +42,7 @@ set -euo pipefail
 
 conda list > ${JOB_DIR}/conda_env.txt
 
+export LOGS_DIR=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs
 export WANDB_MODE=offline
 cd /lustre/fswork/projects/rech/unv/usi32yh/myria3d
 
