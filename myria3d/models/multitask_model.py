@@ -38,8 +38,6 @@ def _compute_shared_knn_interpolation_weights(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute KNN neighbor indices and weights once for a fixed geometry pair."""
     with torch.no_grad():
-        print(f"pos_x: {pos_x.shape}")
-        print(f"pos_y: {pos_y.shape}")
         assign_index = knn(
             pos_x,
             pos_y,

@@ -28,6 +28,14 @@ MULTITASK_TARGET_FILES = (
     ("natural_habitat", "y_natural_habitat"),
     ("elevation", "y_elevation"),
 )
+# Void / missing fills aligned with configs/dataset_description/flair3d_plus_multitask.yaml
+# and flair3d.py raster preprocessing (missing GeoTIFF → all ignore_index).
+MULTITASK_MISSING_FILLS = {
+    "y": 15,
+    "y_forest": 2,
+    "y_land_use": 10,
+    "y_natural_habitat": 11,
+}
 
 
 def load_too_small_tiles_from_csv(csv_path: Optional[str]) -> Set[Tuple[str, str]]:
@@ -152,16 +160,25 @@ def load_pointcept_scene(scene_dir: str) -> Data:
 
     for asset_name, data_key in MULTITASK_TARGET_FILES:
         asset_path = osp.join(scene_dir, f"{asset_name}.npy")
-        if not osp.isfile(asset_path):
-            continue
-        values = np.load(asset_path).reshape(-1)
-        if data_key == "y_elevation":
-            kwargs[data_key] = torch.from_numpy(values.astype(np.float32, copy=False))
-        else:
-            tensor = torch.from_numpy(values.astype(np.int64, copy=False))
-            if data_key == "y":
-                tensor[tensor < 0] = 15
-            kwargs[data_key] = tensor
+        if osp.isfile(asset_path):
+            values = np.load(asset_path).reshape(-1)
+            if data_key == "y_elevation":
+                kwargs[data_key] = torch.from_numpy(values.astype(np.float32, copy=False))
+            else:
+                tensor = torch.from_numpy(values.astype(np.int64, copy=False))
+                if data_key == "y":
+                    tensor[tensor < 0] = MULTITASK_MISSING_FILLS["y"]
+                kwargs[data_key] = tensor
+        elif data_key == "y_elevation":
+            kwargs[data_key] = torch.full(
+                (num_points,), float("nan"), dtype=torch.float32
+            )
+        elif data_key in MULTITASK_MISSING_FILLS:
+            kwargs[data_key] = torch.full(
+                (num_points,),
+                MULTITASK_MISSING_FILLS[data_key],
+                dtype=torch.int64,
+            )
 
     return Data(**kwargs)
 

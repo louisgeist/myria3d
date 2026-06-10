@@ -15,6 +15,7 @@ channels:
 dependencies:
   - python=3.10.*
   - pip
+  - setuptools>=69.5,<82  # torchmetrics 0.11 needs pkg_resources (removed in setuptools 82+)
   # --------- Deep Learning --------- #
   - pytorch::pytorch=2.1
   - pytorch::pytorch-cuda=11.8
@@ -31,7 +32,7 @@ dependencies:
   # export LD_LIBRARY_PATH="/home/${USER}/anaconda3/envs/lib:$LD_LIBRARY_PATH"
   # see https://github.com/pyg-team/pytorch_geometric/issues/2040#issuecomment-766610625
   # --------- data formats --------- #
-  - numpy
+  - numpy<2  # PyTorch 2.1 wheels are built against NumPy 1.x
   - h5py
   # --------- geo --------- #
   - pdal=2.8.*
