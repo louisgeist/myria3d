@@ -150,12 +150,11 @@ class MultiTaskModel(LightningModule):
         return interpolated
 
     def forward(
-        self, batch: Batch
+        self, batch: Batch, *, interpolate: bool = True
     ) -> Tuple[Dict[str, Optional[torch.Tensor]], Dict[str, torch.Tensor]]:
         outputs = self.model(batch.x, batch.pos, batch.batch, batch.ptr)
 
-        interpolate_at_eval = bool(getattr(self.hparams, "interpolate_at_eval", True))
-        if self.training or "copies" not in batch or not interpolate_at_eval:
+        if self.training or "copies" not in batch or not interpolate:
             targets = {
                 task_name: self._get_batch_target(batch, task_name)
                 for task_name in self.task_configs
@@ -224,7 +223,8 @@ class MultiTaskModel(LightningModule):
         }
 
     def validation_step(self, batch: Batch, batch_idx: int) -> dict:
-        targets, outputs = self.forward(batch)
+        interpolate = bool(getattr(self.hparams, "interpolate_at_val", True))
+        targets, outputs = self.forward(batch, interpolate=interpolate)
         loss, losses = self._compute_loss(targets, outputs)
         self.log("val/loss", loss, on_step=True, on_epoch=True)
         for task_name, task_loss in losses.items():
@@ -236,7 +236,8 @@ class MultiTaskModel(LightningModule):
         }
 
     def test_step(self, batch: Batch, batch_idx: int):
-        targets, outputs = self.forward(batch)
+        interpolate = bool(getattr(self.hparams, "interpolate_at_test", True))
+        targets, outputs = self.forward(batch, interpolate=interpolate)
         loss, losses = self._compute_loss(targets, outputs)
         self.log("test/loss", loss, on_step=False, on_epoch=True)
         for task_name, task_loss in losses.items():
