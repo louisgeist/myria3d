@@ -15,8 +15,9 @@ neural_net_hparams: ???
 
 interpolation_k: ${predict.interpolator.interpolation_k}
 num_workers: 4
-# When false, val/test metrics use subsampled points (no CPU knn_interpolate).
-interpolate_at_eval: true
+# When false, metrics use subsampled points (no CPU knn_interpolate).
+interpolate_at_val: false
+interpolate_at_test: true
 
 momentum: 0.9
 monitor: "val/iou"
