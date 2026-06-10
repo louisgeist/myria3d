@@ -22,8 +22,8 @@ logger:
       RandLaNet | Flair3D+ multitask Pointcept npy | voxel=${datamodule.transforms.preparations.voxel}
 
 trainer:
-  min_epochs: 100
-  max_epochs: 150
+  min_epochs: 1
+  max_epochs: 1
   num_sanity_val_steps: 2
   accelerator: gpu
 
