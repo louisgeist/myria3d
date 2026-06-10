@@ -11,12 +11,31 @@ import h5py
 import torch
 from torch_geometric.data import Data
 import pandas as pd
+from myria3d.pctl.dataset.flair3d_label_remap import (
+    PreprocessLabelDefinitions,
+    apply_remap,
+    build_preprocess_label_definitions,
+)
+from myria3d.pctl.dataset.raster_utils import (
+    build_modality_patch_path,
+    parse_ply_patch_metadata,
+    sample_raster_to_points,
+    sample_raster_to_points_float,
+)
 from myria3d.pctl.points_pre_transform.lidar_hd import lidar_hd_pre_transform
 from myria3d.utils import utils
 
 log = utils.get_logger(__name__)
 
 from myria3d.pctl.dataset.hdf5 import HDF5Dataset
+
+MULTITASK_TARGET_KEYS = (
+    "y",
+    "y_forest",
+    "y_land_use",
+    "y_natural_habitat",
+    "y_elevation",
+)
 
 
 def _parse_csv_bool(raw: str) -> bool:
@@ -25,7 +44,7 @@ def _parse_csv_bool(raw: str) -> bool:
 
 
 def build_ply_path(labels_root: str, dept_year: str, roi: str, scene_i_j: str) -> str:
-    """Resolve a Flair3D-build output PLY path (label=v12 layout)."""
+    """Resolve a Flair3D-build output PLY path (same layout for label=v12, v14, …)."""
     ply_filename = f"{dept_year}_LIDARHD_{roi}_{scene_i_j}.ply"
     return osp.abspath(
         osp.join(labels_root, "LIDARHD", f"{dept_year}_LIDARHD", roi, ply_filename)
@@ -166,13 +185,18 @@ class FLAIR3DDataset(HDF5Dataset):
         )
         if "y" in grp:
             y = torch.from_numpy(grp["y"][...]).long()
-            # Flair3D-build v12: invalid semantic ids (-1) → Void (15, ignore_index).
+            # Flair3D-build (v12/v14): invalid semantic ids (-1) → Void (15, ignore_index).
             y[y < 0] = 15
             kwargs["y"] = y
         if "y_cosia" in grp:
             kwargs["y_cosia"] = torch.from_numpy(grp["y_cosia"][...])
         if "y_lidarhd" in grp:
             kwargs["y_lidarhd"] = torch.from_numpy(grp["y_lidarhd"][...])
+        for y_name in ("y_forest", "y_land_use", "y_natural_habitat"):
+            if y_name in grp:
+                kwargs[y_name] = torch.from_numpy(grp[y_name][...]).long()
+        if "y_elevation" in grp:
+            kwargs["y_elevation"] = torch.from_numpy(grp["y_elevation"][...]).float()
         return Data(**kwargs)
 
 
@@ -276,10 +300,10 @@ def flair3d_pre_transform(points):
 
 
 def flair3d_plus_pre_transform(points):
-    """Load Flair3D-build output PLY with precomputed ``semantic`` labels (v12)."""
+    """Load Flair3D-build output PLY with precomputed ``semantic`` labels (v14; v12 also supported)."""
     if "semantic" not in points.dtype.names:
         raise KeyError(
-            "Field 'semantic' not found in PLY. Run Flair3D-build (label=v12) on this patch first. "
+            "Field 'semantic' not found in PLY. Run Flair3D-build (e.g. label=v14) on this patch first. "
             f"Available fields: {points.dtype.names}"
         )
 
@@ -288,6 +312,108 @@ def flair3d_plus_pre_transform(points):
     y = np.asarray(points["semantic"], dtype=np.float32)
 
     return Data(pos=pos, x=x, y=y, x_features_names=x_features_names)
+
+
+def enrich_points_with_raster_labels(
+    points,
+    cloud_path: str,
+    raster_root: str,
+    label_definitions: Optional[PreprocessLabelDefinitions] = None,
+):
+    """Sample GeoTIFF labels onto points once per patch (before subtiling)."""
+    if label_definitions is None:
+        label_definitions = build_preprocess_label_definitions()
+
+    dept_year, roi, lidar_patch_stem = parse_ply_patch_metadata(cloud_path)
+    pos = _get_xyz(points)
+    xy = pos[:, :2]
+    z = pos[:, 2].astype(np.float32, copy=False)
+
+    forest_def = label_definitions.forest
+    forest_path = build_modality_patch_path(
+        raster_root, "FOREST", dept_year, roi, lidar_patch_stem
+    )
+    if osp.isfile(forest_path):
+        forest_raw, _ = sample_raster_to_points(
+            forest_path, xy, fill_value=forest_def.missing_fill_raw_id
+        )
+        forest = apply_remap(forest_raw, forest_def).astype(np.float32)
+    else:
+        log.warning("FOREST raster missing for %s — filling void labels.", cloud_path)
+        forest = np.full(points.shape[0], forest_def.ignore_index, dtype=np.float32)
+    points = append_fields(points, "forest", forest, dtypes=np.float32, usemask=False)
+
+    land_use_def = label_definitions.land_use
+    land_use_path = build_modality_patch_path(
+        raster_root, "LAND_USE", dept_year, roi, lidar_patch_stem
+    )
+    if osp.isfile(land_use_path):
+        land_use_raw, _ = sample_raster_to_points(
+            land_use_path, xy, fill_value=land_use_def.missing_fill_raw_id
+        )
+        land_use = apply_remap(land_use_raw, land_use_def).astype(np.float32)
+    else:
+        land_use = np.full(points.shape[0], land_use_def.ignore_index, dtype=np.float32)
+    points = append_fields(points, "land_use", land_use, dtypes=np.float32, usemask=False)
+
+    nh_def = label_definitions.natural_habitat
+    nh_path = build_modality_patch_path(
+        raster_root, "NATURAL_HABITAT", dept_year, roi, lidar_patch_stem
+    )
+    if osp.isfile(nh_path):
+        nh_raw, _ = sample_raster_to_points(
+            nh_path, xy, fill_value=nh_def.missing_fill_raw_id
+        )
+        natural_habitat = apply_remap(nh_raw, nh_def).astype(np.float32)
+    else:
+        natural_habitat = np.full(points.shape[0], nh_def.ignore_index, dtype=np.float32)
+    points = append_fields(
+        points, "natural_habitat", natural_habitat, dtypes=np.float32, usemask=False
+    )
+
+    dem_path = build_modality_patch_path(
+        raster_root, "DEM_ELEV", dept_year, roi, lidar_patch_stem
+    )
+    if osp.isfile(dem_path):
+        dtm_values, _ = sample_raster_to_points_float(
+            dem_path, xy, fill_value=np.nan, band_index=2
+        )
+        elevation = z - dtm_values
+    else:
+        elevation = np.full(points.shape[0], np.nan, dtype=np.float32)
+    points = append_fields(points, "elevation", elevation, dtypes=np.float32, usemask=False)
+
+    return points
+
+
+def flair3d_plus_multitask_pre_transform(points):
+    """Flair3D+ pre-transform with segment + raster-derived multitask labels."""
+    if "semantic" not in points.dtype.names:
+        raise KeyError(
+            "Field 'semantic' not found in PLY. Run Flair3D-build (e.g. label=v14) on this patch first. "
+            f"Available fields: {points.dtype.names}"
+        )
+
+    label_definitions = build_preprocess_label_definitions()
+    pos = _get_xyz(points)
+    x, x_features_names = _flair3d_feature_tensors(points)
+
+    y = apply_remap(
+        np.asarray(points["semantic"], dtype=np.int64), label_definitions.segment
+    ).astype(np.float32)
+
+    kwargs = dict(pos=pos, x=x, y=y, x_features_names=x_features_names)
+
+    if "forest" in points.dtype.names:
+        kwargs["y_forest"] = np.asarray(points["forest"], dtype=np.float32)
+    if "land_use" in points.dtype.names:
+        kwargs["y_land_use"] = np.asarray(points["land_use"], dtype=np.float32)
+    if "natural_habitat" in points.dtype.names:
+        kwargs["y_natural_habitat"] = np.asarray(points["natural_habitat"], dtype=np.float32)
+    if "elevation" in points.dtype.names:
+        kwargs["y_elevation"] = np.asarray(points["elevation"], dtype=np.float32)
+
+    return Data(**kwargs)
 
 
 def _cli_manifest_to_split():

@@ -1,0 +1,59 @@
+_conc_convert_: all
+
+# Flair3D+ multitask: segment + forest + land_use + natural_habitat + elevation.
+classification_preprocessing_dict: {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, 11: 11, 12: 12, 13: 13, 14: 14, 15: 15}
+
+classification_dict:
+  0: "Building"
+  1: "Greenhouse"
+  2: "Impervious surface"
+  3: "Other soil"
+  4: "Herbaceous"
+  5: "Vineyard"
+  6: "Brushwood"
+  7: "Other infrastructures"
+  8: "Swimming pool"
+  9: "Water"
+  10: "Deciduous"
+  11: "Coniferous"
+  12: "Bridge"
+  13: "Agricultural soil"
+  14: "Soil under vegetation"
+  15: "Void"
+
+class_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+d_in: 5
+num_classes: 16
+
+main_task: segment
+elevation_target_scale: 0.01
+
+task_configs:
+  segment:
+    task_type: semantic
+    num_classes: 16
+    ignore_index: 15
+  forest:
+    task_type: semantic
+    # Label ids 0=Not Forest, 1=Forest, 2=Void — num_classes must include void (torchmetrics + CE head).
+    num_classes: 3
+    ignore_index: 2
+  land_use:
+    task_type: semantic
+    # Filtered remap: train ids 0-9 + void=10.
+    num_classes: 11
+    ignore_index: 10
+  natural_habitat:
+    task_type: semantic
+    # by_habitat_x_domain: train ids 0-10 + void=11.
+    num_classes: 12
+    ignore_index: 11
+  elevation:
+    task_type: regression
+
+task_weights:
+  segment: 1.0
+  forest: 1.0
+  land_use: 1.0
+  natural_habitat: 1.0
+  elevation: 1.0

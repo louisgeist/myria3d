@@ -34,7 +34,6 @@ train:
 
   Center:
     _target_: torch_geometric.transforms.Center
-  
   TargetToOneHot:
     _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
     _args_:
@@ -78,7 +77,6 @@ eval:
 
   Center:
     _target_: torch_geometric.transforms.Center
-    
   TargetToOneHot:
     _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
     _args_:

@@ -88,9 +88,19 @@ def launch_hdf5(config: DictConfig):
     if config.get("print_config"):
         utils.print_config(config, resolve=False)
 
+    from functools import partial
+
+    from myria3d.pctl.dataset.flair3d import enrich_points_with_raster_labels
+
     las_paths_by_split_dict = get_las_paths_by_split_dict(
         config.datamodule.get("data_dir"), config.datamodule.get("split_csv_path")
     )
+    raster_root = config.datamodule.get("raster_root")
+    points_enricher = None
+    if raster_root:
+        points_enricher = partial(
+            enrich_points_with_raster_labels, raster_root=raster_root
+        )
     create_hdf5(
         las_paths_by_split_dict=las_paths_by_split_dict,
         hdf5_file_path=config.datamodule.get("hdf5_file_path"),
@@ -102,6 +112,7 @@ def launch_hdf5(config: DictConfig):
         points_pre_transform=hydra.utils.instantiate(
             config.datamodule.get("points_pre_transform")
         ),
+        points_enricher=points_enricher,
     )
 
 

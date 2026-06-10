@@ -1,6 +1,7 @@
 _conc_convert_: all
 
-# Flair3D-build label=v12 (finer12): semantic ids 0-14 + Void=15
+# Flair3D-build semantic labels (v14 current; v12 legacy naming in config paths).
+# Same taxonomy: ids 0-14 + Void=15 (ignore_index).
 classification_preprocessing_dict: {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, 11: 11, 12: 12, 13: 13, 14: 14, 15: 15}
 
 classification_dict:

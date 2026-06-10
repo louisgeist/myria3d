@@ -1,3 +1,4 @@
+from functools import partial
 from numbers import Number
 from typing import Callable, Dict, List, Optional
 
@@ -40,10 +41,12 @@ class HDF5LidarDataModule(LightningDataModule):
         num_workers: int = 1,
         prefetch_factor: int = 2,
         transforms: Optional[Dict[str, TRANSFORMS_LIST]] = None,
+        raster_root: Optional[str] = None,
         **kwargs,
     ):
         super().__init__()
 
+        self.raster_root = raster_root
         self.split_csv_path = split_csv_path
         self.data_dir = data_dir
         self.hdf5_file_path = hdf5_file_path
@@ -134,6 +137,7 @@ class HDF5LidarDataModule(LightningDataModule):
             self.epsg,
             las_paths_by_split_dict=self.las_paths_by_split_dict,
             points_pre_transform=self.points_pre_transform,
+            points_enricher=self._build_points_enricher(),
             tile_width=self.tile_width,
             subtile_width=self.subtile_width,
             subtile_overlap_train=self.subtile_overlap_train,
@@ -142,6 +146,13 @@ class HDF5LidarDataModule(LightningDataModule):
             eval_transform=self.eval_transform,
         )
         return self._dataset
+
+    def _build_points_enricher(self) -> Optional[Callable]:
+        if not self.raster_root:
+            return None
+        from myria3d.pctl.dataset.flair3d import enrich_points_with_raster_labels
+
+        return partial(enrich_points_with_raster_labels, raster_root=self.raster_root)
 
     def train_dataloader(self):
         return GeometricNoneProofDataloader(
@@ -246,6 +257,7 @@ class Flair3DDatamodule(HDF5LidarDataModule):
             self.epsg,
             las_paths_by_split_dict=self.las_paths_by_split_dict,
             points_pre_transform=self.points_pre_transform,
+            points_enricher=self._build_points_enricher(),
             tile_width=self.tile_width,
             subtile_width=self.subtile_width,
             subtile_overlap_train=self.subtile_overlap_train,

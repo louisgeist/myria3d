@@ -1,4 +1,5 @@
-# Preparations for Flair3D+ with Flair3D-build v12 semantic labels (no COSIA/LidarHD fusion).
+# Preparations for Flair3D+ with Flair3D-build semantic labels (v14; v12-compatible).
+# No COSIA/LidarHD fusion — labels come precomputed in the PLY ``semantic`` field.
 voxel: 0.25
 
 train:
@@ -22,7 +23,6 @@ train:
 
   Center:
     _target_: torch_geometric.transforms.Center
-
   TargetToOneHot:
     _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
     _args_:
@@ -58,7 +58,6 @@ eval:
 
   Center:
     _target_: torch_geometric.transforms.Center
-
   TargetToOneHot:
     _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
     _args_:

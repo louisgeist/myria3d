@@ -1,4 +1,5 @@
 # @package _global_
+# Flair3D+ experiment using Flair3D-build precomputed labels (v14 in production; v12 in file names).
 
 defaults:
   - override /model: pyg_randla_net_model.yaml

@@ -1,0 +1,12 @@
+defaults:
+  - multitask_default.yaml
+
+lr: 0.003933709606504788
+
+neural_net_class_name: "PyGRandLANetMultiTask"
+neural_net_hparams:
+  num_features: ${model.d_in}
+  task_configs: ${dataset_description.task_configs}
+  num_neighbors: 16
+  decimation: 4
+  return_logits: true

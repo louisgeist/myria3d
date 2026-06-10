@@ -37,6 +37,7 @@ dependencies:
   - pdal=2.8.*
   - python-pdal
   - conda-forge::gdal
+  - conda-forge::rasterio
   - conda-forge::pyproj
   # --------- Visualization --------- #
   - pandas

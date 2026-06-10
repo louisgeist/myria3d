@@ -95,12 +95,24 @@ class CopyFullPos:
 
 
 class CopyFullPreparedTargets:
-    """Make a copy of all, prepared targets - to be used for test."""
+    """Make a copy of all prepared targets - to be used for test."""
+
+    MULTITASK_TARGET_KEYS = (
+        "y",
+        "y_forest",
+        "y_land_use",
+        "y_natural_habitat",
+        "y_elevation",
+    )
 
     def __call__(self, data: Data):
         if "copies" not in data:
             data.copies = dict()
-        data.copies["transformed_y_copy"] = data["y"].clone()
+        for key in self.MULTITASK_TARGET_KEYS:
+            if hasattr(data, key) and getattr(data, key) is not None:
+                data.copies[f"transformed_{key}_copy"] = getattr(data, key).clone()
+        if hasattr(data, "y") and data.y is not None:
+            data.copies["transformed_y_copy"] = data.y.clone()
         return data
 
 
@@ -163,6 +175,21 @@ class NormalizePos(BaseTransform):
 
     def __repr__(self):
         return "{}()".format(self.__class__.__name__)
+
+
+class ZRandomOffset(BaseTransform):
+    """Random vertical translation applied uniformly to all points (Z registration noise)."""
+
+    def __init__(self, std: float = 0.1):
+        self.std = std
+
+    def __call__(self, data: Data) -> Data:
+        z_offset = torch.randn(1, device=data.pos.device, dtype=data.pos.dtype).item() * self.std
+        data.pos[:, 2] = data.pos[:, 2] + z_offset
+        return data
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(std={self.std})"
 
 
 class TargetTransform(BaseTransform):

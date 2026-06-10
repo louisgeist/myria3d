@@ -13,8 +13,9 @@ from tqdm import tqdm
 from myria3d.pctl.dataset.utils import (
     LAS_PATHS_BY_SPLIT_DICT_TYPE,
     SPLIT_TYPE,
+    pdal_read_point_cloud_array_as_float32,
     pre_filter_below_n_points,
-    split_cloud_into_samples,
+    split_points_into_samples,
 )
 from myria3d.pctl.points_pre_transform.lidar_hd import lidar_hd_pre_transform
 from myria3d.utils import utils
@@ -35,6 +36,7 @@ class HDF5Dataset(Dataset):
         subtile_width: Number = 50,
         subtile_overlap_train: Number = 0,
         pre_filter=pre_filter_below_n_points,
+        points_enricher: Optional[Callable] = None,
         train_transform: List[Callable] = None,
         eval_transform: List[Callable] = None,
     ):
@@ -55,6 +57,7 @@ class HDF5Dataset(Dataset):
         """
 
         self.points_pre_transform = points_pre_transform
+        self.points_enricher = points_enricher
         self.pre_filter = pre_filter
         self.train_transform = train_transform
         self.eval_transform = eval_transform
@@ -86,6 +89,7 @@ class HDF5Dataset(Dataset):
             pre_filter,
             subtile_overlap_train,
             points_pre_transform,
+            points_enricher=self.points_enricher,
         )
 
         # Use property once to be sure that samples are all indexed into the hdf5 file.
@@ -203,6 +207,7 @@ def create_hdf5(
     pre_filter: Optional[Callable[[Data], bool]] = pre_filter_below_n_points,
     subtile_overlap_train: Number = 0,
     points_pre_transform: Callable = lidar_hd_pre_transform,
+    points_enricher: Optional[Callable] = None,
 ):
     """Create a HDF5 dataset file from las.
 
@@ -242,12 +247,14 @@ def create_hdf5(
                 subtile_overlap = (
                     subtile_overlap_train if split == "train" else 0
                 )  # No overlap at eval time.
+                points = pdal_read_point_cloud_array_as_float32(las_path, epsg)
+                if points_enricher is not None:
+                    points = points_enricher(points, las_path)
                 for sample_number, (sample_idx, sample_points) in enumerate(
-                    split_cloud_into_samples(
-                        las_path,
+                    split_points_into_samples(
+                        points,
                         tile_width,
                         subtile_width,
-                        epsg,
                         subtile_overlap,
                     )
                 ):
@@ -274,7 +281,14 @@ def create_hdf5(
                         dtype="f",
                         data=data.pos,
                     )
-                    for y_name in ["y", "y_cosia", "y_lidarhd"]:
+                    for y_name in [
+                        "y",
+                        "y_cosia",
+                        "y_lidarhd",
+                        "y_forest",
+                        "y_land_use",
+                        "y_natural_habitat",
+                    ]:
                         if getattr(data, y_name, None) is not None:
                             hdf5_file.create_dataset(
                                 os.path.join(hdf5_path, y_name),
@@ -282,6 +296,13 @@ def create_hdf5(
                                 dtype="i",
                                 data=data[y_name],
                             )
+                    if getattr(data, "y_elevation", None) is not None:
+                        hdf5_file.create_dataset(
+                            os.path.join(hdf5_path, "y_elevation"),
+                            data.y_elevation.shape,
+                            dtype="f",
+                            data=data.y_elevation,
+                        )
                     hdf5_file.create_dataset(
                         os.path.join(hdf5_path, "idx_in_original_cloud"),
                         sample_idx.shape,

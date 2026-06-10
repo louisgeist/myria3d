@@ -25,7 +25,6 @@ train:
 
   Center:
     _target_: torch_geometric.transforms.Center
-
 eval:
 
   CopyFullPos:
@@ -61,7 +60,6 @@ eval:
 
   Center:
     _target_: torch_geometric.transforms.Center
-  
 predict:
 
   CopyFullPos:

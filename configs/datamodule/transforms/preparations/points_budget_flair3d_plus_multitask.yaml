@@ -1,15 +1,7 @@
-# default preparations with grid sampling and random sampling.
-voxel: 0.25
+# Preparations for Flair3D+ multitask (segment + raster-derived targets).
+voxel: 0.1
 
 train:
-
-  TargetTransform:
-    _target_: myria3d.pctl.transforms.transforms.TargetTransform
-    _args_:
-      - ${dataset_description.classification_preprocessing_dict}
-      - ${dataset_description.classification_dict}
-
-
   DropPointsByClass:
     _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
 
@@ -17,7 +9,7 @@ train:
     _target_: torch_geometric.transforms.GridSampling
     _args_:
       - ${datamodule.transforms.preparations.voxel}
-  
+
   MinimumNumNodes:
     _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
     _args_:
@@ -30,19 +22,15 @@ train:
 
   Center:
     _target_: torch_geometric.transforms.Center
-  TargetToOneHot:
-    _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
-    _args_:
-      - ${dataset_description.num_classes}
+
+  NullifyLowestZ:
+    _target_: myria3d.pctl.transforms.transforms.NullifyLowestZ
+
+  ZRandomOffset:
+    _target_: myria3d.pctl.transforms.transforms.ZRandomOffset
+    std: 0.1
 
 eval:
-
-  TargetTransform:
-    _target_: myria3d.pctl.transforms.transforms.TargetTransform
-    _args_:
-      - ${dataset_description.classification_preprocessing_dict}
-      - ${dataset_description.classification_dict}
-
   DropPointsByClass:
     _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
 
@@ -72,14 +60,11 @@ eval:
 
   Center:
     _target_: torch_geometric.transforms.Center
-  TargetToOneHot:
-    _target_: myria3d.pctl.transforms.transforms.TargetToOneHot
-    _args_:
-      - ${dataset_description.num_classes}
 
+  NullifyLowestZ:
+    _target_: myria3d.pctl.transforms.transforms.NullifyLowestZ
 
 predict:
-
   DropPointsByClass:
     _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
 
@@ -106,3 +91,6 @@ predict:
 
   Center:
     _target_: torch_geometric.transforms.Center
+
+  NullifyLowestZ:
+    _target_: myria3d.pctl.transforms.transforms.NullifyLowestZ

@@ -1,0 +1,21 @@
+_target_: myria3d.pctl.datamodule.pointcept_npy.PointceptNpyDatamodule
+
+data_root: /data/geist/Pointcept/data/flair3d_plus
+csv_manifest: ${datamodule.data_root}/raw/scene_split_manifest_D067.csv
+excluded_tiles_details_csv: ${datamodule.data_root}/missing_coord_tiles.details.csv
+too_small_tiles_manifest: ${datamodule.data_root}/too_small_tiles.csv
+
+subtile_width: 100
+
+pre_filter:
+  _target_: functools.partial
+  _args_:
+    - "${get_method:myria3d.pctl.dataset.utils.pre_filter_below_n_points}"
+  min_num_nodes: 1
+
+batch_size: 12
+num_workers: 4
+prefetch_factor: 2
+
+defaults:
+  - transforms: default.yaml

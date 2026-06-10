@@ -1,0 +1,43 @@
+_target_: myria3d.models.multitask_model.MultiTaskModel
+
+d_in: ${dataset_description.d_in}
+num_classes: ${dataset_description.num_classes}
+classification_dict: ${dataset_description.classification_dict}
+
+task_configs: ${dataset_description.task_configs}
+task_weights: ${dataset_description.task_weights}
+main_task: ${dataset_description.main_task}
+elevation_target_scale: ${dataset_description.elevation_target_scale}
+
+ckpt_path: null
+neural_net_class_name: ???
+neural_net_hparams: ???
+
+interpolation_k: ${predict.interpolator.interpolation_k}
+num_workers: 4
+# When false, val/test metrics use subsampled points (no CPU knn_interpolate).
+interpolate_at_eval: true
+
+momentum: 0.9
+monitor: "val/iou"
+
+criteria:
+  segment:
+    _target_: torch.nn.CrossEntropyLoss
+    ignore_index: 15
+  forest:
+    _target_: torch.nn.CrossEntropyLoss
+    ignore_index: 2
+  land_use:
+    _target_: torch.nn.CrossEntropyLoss
+    ignore_index: 10
+  natural_habitat:
+    _target_: torch.nn.CrossEntropyLoss
+    ignore_index: 11
+  elevation:
+    _target_: torch.nn.SmoothL1Loss
+    beta: 0.01
+
+defaults:
+  - optimizer: Adam.yaml
+  - lr_scheduler: ReduceLROnPlateau.yaml

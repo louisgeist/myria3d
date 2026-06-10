@@ -1,6 +1,6 @@
-# Flair3D+ with Flair3D-build labels (v12)
+# Flair3D+ with Flair3D-build labels
 
-This workflow trains on the full Flair3D+ dataset using precomputed semantic labels from [Flair3D-build](https://github.com/IGNF/Flair3D-build) (`label=v12`, 16 classes including Void).
+This workflow trains on the full Flair3D+ dataset using precomputed semantic labels from [Flair3D-build](https://github.com/IGNF/Flair3D-build). Use **`label=v14`** in Flair3D-build (current); myria3d only reads the `semantic` field from the output PLY (16 classes including Void). Config and file names still say `v12` for historical reasons.
 
 The steps are the same on every machine:
 
@@ -91,6 +91,12 @@ After HDF5 creation, you may set `datamodule.data_dir` and `datamodule.split_csv
 
 ---
 
+## Multitask
+
+See the repo guide [`readme_flair3d.md`](../../../readme_flair3d.md) (segment + forest + land_use + natural_habitat + elevation).
+
+---
+
 ## Jean Zay
 
 IDRIS cluster (account `unv@h100`). Persistent data on `fsn1`, working copies on `fswork`. Adjust `usi32yh` if your login differs.
@@ -157,21 +163,43 @@ HDF5 creation is I/O-heavy; a login node is fine for a smoke test, but prefer a 
 ```bash
 cd /lustre/fswork/projects/rech/unv/usi32yh/myria3d
 conda activate myria3d
+mkdir -p logs
 
+sbatch scripts/jz/run_flair3d_plus_hdf5.slurm
+```
+
+Or interactively:
+
+```bash
 python run.py experiment=flair3d_plus/base_v12 \
   datamodule.split_csv_path=/lustre/fsn1/projects/rech/unv/usi32yh/data/myria3d/flair3d_plus_split.csv \
   datamodule.hdf5_file_path=/lustre/fsn1/projects/rech/unv/usi32yh/data/myria3d/flair3d_plus_v12.hdf5 \
   task.task_name=create_hdf5
 ```
 
-Training (GPU). Example with one H100:
+Training (GPU). Submit with SLURM — creates the HDF5 on first run if it does not exist yet:
+
+```bash
+sbatch scripts/jz/run_flair3d_plus_train.slurm
+```
+
+Or with `srun` (one H100):
 
 ```bash
 srun --account=unv@h100 -C h100 --gres=gpu:1 --cpus-per-task=10 --time=20:00:00 \
   python run.py experiment=flair3d_plus/base_v12 \
+  datamodule.split_csv_path=/lustre/fsn1/projects/rech/unv/usi32yh/data/myria3d/flair3d_plus_split.csv \
   datamodule.hdf5_file_path=/lustre/fsn1/projects/rech/unv/usi32yh/data/myria3d/flair3d_plus_v12.hdf5 \
-  datamodule.data_dir=null \
-  datamodule.split_csv_path=null
+  datamodule.data_dir=.
 ```
 
-After HDF5 creation, `datamodule.data_dir` and `datamodule.split_csv_path` are no longer required.
+`run_flair3d_plus_hdf5.slurm` remains optional (CPU-only HDF5 build before training).
+
+Scripts live under `scripts/jz/`. Override paths without editing the file, e.g.:
+
+```bash
+export JZ_USER=usi32yh
+export SPLIT_CSV=/lustre/fsn1/projects/rech/unv/usi32yh/data/myria3d/flair3d_plus_split_D067.csv
+export HDF5_PATH=/lustre/fsn1/projects/rech/unv/usi32yh/data/myria3d/flair3d_plus_v12_D067.hdf5
+sbatch scripts/jz/run_flair3d_plus_train.slurm
+```
