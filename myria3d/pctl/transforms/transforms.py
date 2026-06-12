@@ -1,4 +1,5 @@
 import math
+import random
 import re
 from typing import Dict, List
 
@@ -7,6 +8,7 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.transforms import BaseTransform
 
+from myria3d.pctl.dataset.utils import get_num_subtiles, get_subtile_choice
 from myria3d.utils import utils
 
 log = utils.get_logger(__name__)
@@ -43,6 +45,71 @@ def subsample_data(data, num_nodes, choice: torch.Tensor):
             data[key] = item[choice]
 
     return data
+
+
+class SubtileCrop(BaseTransform):
+    """Crop a point cloud to one square subtile (HDF5 mosaic logic).
+
+    When data.subtile_index is set, that subtile is used. Otherwise, if random=True,
+    one subtile is drawn uniformly. Returns None when the crop is empty.
+    """
+
+    def __init__(
+        self,
+        tile_width: float = 100,
+        subtile_width: float = 50,
+        subtile_overlap: float = 0,
+        random: bool = False,
+    ):
+        self.tile_width = tile_width
+        self.subtile_width = subtile_width
+        self.subtile_overlap = subtile_overlap
+        self.random = random
+
+    def __call__(self, data: Data):
+        num_subtiles = get_num_subtiles(
+            self.tile_width, self.subtile_width, subtile_overlap=self.subtile_overlap
+        )
+        if num_subtiles == 0:
+            raise ValueError("SubtileCrop requires at least one subtile.")
+
+        subtile_index = getattr(data, "subtile_index", None)
+        if subtile_index is None:
+            if not self.random:
+                raise ValueError(
+                    "SubtileCrop requires data.subtile_index or random=True."
+                )
+            subtile_index = random.randint(0, num_subtiles - 1)
+        else:
+            subtile_index = int(subtile_index)
+
+        if hasattr(data, "subtile_index"):
+            del data.subtile_index
+
+        choice = get_subtile_choice(
+            data.pos,
+            self.tile_width,
+            self.subtile_width,
+            subtile_index,
+            subtile_overlap=self.subtile_overlap,
+        )
+        if not choice.any():
+            return None
+
+        num_nodes = data.num_nodes
+        if hasattr(data, "idx_in_original_cloud") and data.idx_in_original_cloud is not None:
+            original_idx = np.asarray(data.idx_in_original_cloud)
+        else:
+            original_idx = np.arange(num_nodes, dtype=np.int32)
+        data = subsample_data(data, num_nodes, choice)
+        data.idx_in_original_cloud = original_idx[choice.numpy()]
+        return data
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(tile_width={self.tile_width}, "
+            f"subtile_width={self.subtile_width}, random={self.random})"
+        )
 
 
 class MaximumNumNodes(BaseTransform):

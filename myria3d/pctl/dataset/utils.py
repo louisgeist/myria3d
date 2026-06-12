@@ -8,7 +8,7 @@ from typing import Dict, List, Literal, Union
 import numpy as np
 import pandas as pd
 import pdal
-from scipy.spatial import cKDTree
+import torch
 
 SPLIT_TYPE = Union[Literal["train"], Literal["val"], Literal["test"]]
 LAS_PATHS_BY_SPLIT_DICT_TYPE = Dict[SPLIT_TYPE, List[str]]
@@ -36,6 +36,15 @@ def get_mosaic_of_centers(tile_width: Number, subtile_width: Number, subtile_ove
         step=subtile_width - subtile_overlap,
     )
     return [np.array([x, y]) for x in xy_range for y in xy_range]
+
+
+def get_num_subtiles(
+    tile_width: Number,
+    subtile_width: Number,
+    subtile_overlap: Number = 0,
+) -> int:
+    """Number of mosaic subtiles for a tile (e.g. 4 for 100 m / 50 m, overlap 0)."""
+    return len(get_mosaic_of_centers(tile_width, subtile_width, subtile_overlap))
 
 
 def pdal_read_point_cloud_array(cloud_path: str, epsg: str):
@@ -181,6 +190,52 @@ def get_pdal_info_metadata(las_path: str) -> Dict:
 # hdf5, iterable
 
 
+def get_subtile_choice(
+    pos: torch.Tensor,
+    tile_width: Number,
+    subtile_width: Number,
+    subtile_index: int,
+    subtile_overlap: Number = 0,
+) -> torch.Tensor:
+    """Return a boolean mask selecting one square subtile; stays on pos.device."""
+    if pos.ndim != 2 or pos.shape[1] < 2:
+        raise ValueError(f"pos must be (N, >=2), got {tuple(pos.shape)}")
+
+    centers = get_mosaic_of_centers(
+        tile_width, subtile_width, subtile_overlap=subtile_overlap
+    )
+    if subtile_index < 0 or subtile_index >= len(centers):
+        raise ValueError(
+            f"subtile_index must be in [0, {len(centers)}), got {subtile_index}"
+        )
+
+    center = torch.as_tensor(
+        centers[subtile_index], device=pos.device, dtype=pos.dtype
+    )
+    xy_local = pos[:, :2] - pos[:, :2].min(dim=0).values
+    radius = subtile_width // 2
+    return (torch.abs(xy_local - center) <= radius).all(dim=1)
+
+
+def get_subtile_mask(
+    pos: np.ndarray,
+    tile_width: Number,
+    subtile_width: Number,
+    subtile_index: int,
+    subtile_overlap: Number = 0,
+) -> np.ndarray:
+    """Return a boolean mask selecting one square subtile from a tile-local point cloud."""
+    pos = np.asarray(pos, dtype=np.float32)
+    choice = get_subtile_choice(
+        torch.from_numpy(pos),
+        tile_width,
+        subtile_width,
+        subtile_index,
+        subtile_overlap=subtile_overlap,
+    )
+    return choice.numpy()
+
+
 def split_points_into_samples(
     points: np.ndarray,
     tile_width: Number,
@@ -193,16 +248,17 @@ def split_points_into_samples(
         idx_in_original_cloud, and points of sample in pdal input format casted as floats.
     """
     pos = np.asarray([points["X"], points["Y"], points["Z"]], dtype=np.float32).transpose()
-    kd_tree = cKDTree(pos[:, :2] - pos[:, :2].min(axis=0))
-    XYs = get_mosaic_of_centers(tile_width, subtile_width, subtile_overlap=subtile_overlap)
-    for center in XYs:
-        radius = subtile_width // 2  # Square receptive field.
-        minkowski_p = np.inf
-        sample_idx = np.array(kd_tree.query_ball_point(center, r=radius, p=minkowski_p))
+    centers = get_mosaic_of_centers(
+        tile_width, subtile_width, subtile_overlap=subtile_overlap
+    )
+    for subtile_index in range(len(centers)):
+        mask = get_subtile_mask(
+            pos, tile_width, subtile_width, subtile_index, subtile_overlap
+        )
+        sample_idx = np.where(mask)[0]
         if not len(sample_idx):
             continue
-        sample_points = points[sample_idx]
-        yield sample_idx, sample_points
+        yield sample_idx, points[sample_idx]
 
 
 def split_cloud_into_samples(

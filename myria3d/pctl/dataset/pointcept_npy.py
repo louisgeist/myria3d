@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import os
 import os.path as osp
+from numbers import Number
 from typing import Callable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
@@ -13,12 +14,16 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
 from myria3d.pctl.dataset.flair3d import load_excluded_tiles_from_details_csv
-from myria3d.pctl.dataset.utils import SPLIT_TYPE, pre_filter_below_n_points
+from myria3d.pctl.dataset.utils import (
+    SPLIT_TYPE,
+    get_num_subtiles,
+    pre_filter_below_n_points,
+)
 from myria3d.utils import utils
 
 log = utils.get_logger(__name__)
 
-SceneEntry = Tuple[str, SPLIT_TYPE]
+SceneEntry = Tuple[str, SPLIT_TYPE, Optional[int]]
 
 REQUIRED_ASSETS = ("coord",)
 MULTITASK_TARGET_FILES = (
@@ -66,8 +71,18 @@ def build_scene_list(
     excluded_tiles_details_csv: Optional[str] = None,
     too_small_tiles_manifest: Optional[str] = None,
     splits: Sequence[str] = ("train", "val", "test"),
+    tile_width: Number = 100,
+    subtile_width: Number = 50,
+    subtile_overlap: Number = 0,
 ) -> List[SceneEntry]:
-    """Build scene directories from a Pointcept-style split manifest CSV."""
+    """Build scene directories from a Pointcept-style split manifest CSV.
+
+    Train scenes yield one entry (random subtile at transform time). Val/test scenes
+    yield one entry per mosaic subtile (subtile_index 0..N-1).
+    """
+    eval_subtiles_per_scene = get_num_subtiles(
+        tile_width, subtile_width, subtile_overlap=subtile_overlap
+    )
     if not osp.isfile(csv_manifest):
         raise FileNotFoundError(f"CSV manifest not found: {csv_manifest}")
 
@@ -97,10 +112,14 @@ def build_scene_list(
             if not osp.isfile(coord_path):
                 skipped_missing_coord += 1
                 continue
-            scenes.append((scene_dir, split))
+            if split == "train":
+                scenes.append((scene_dir, split, None))
+            else:
+                for subtile_index in range(eval_subtiles_per_scene):
+                    scenes.append((scene_dir, split, subtile_index))
 
     log.info(
-        "PointceptNpy: %d scenes from manifest (skipped %d without coord.npy).",
+        "PointceptNpy: %d dataset entries from manifest (skipped %d without coord.npy).",
         len(scenes),
         skipped_missing_coord,
     )
@@ -192,6 +211,9 @@ class PointceptNpyDataset(Dataset):
         csv_manifest: str,
         excluded_tiles_details_csv: Optional[str] = None,
         too_small_tiles_manifest: Optional[str] = None,
+        tile_width: Number = 100,
+        subtile_width: Number = 50,
+        subtile_overlap: Number = 0,
         pre_filter: Callable[[Data], bool] = pre_filter_below_n_points,
         train_transform: Optional[List[Callable]] = None,
         eval_transform: Optional[List[Callable]] = None,
@@ -204,17 +226,23 @@ class PointceptNpyDataset(Dataset):
             csv_manifest=csv_manifest,
             excluded_tiles_details_csv=excluded_tiles_details_csv,
             too_small_tiles_manifest=too_small_tiles_manifest,
+            tile_width=tile_width,
+            subtile_width=subtile_width,
+            subtile_overlap=subtile_overlap,
         )
 
     def __len__(self) -> int:
         return len(self._scenes)
 
     def __getitem__(self, idx: int) -> Optional[Data]:
-        scene_dir, split = self._scenes[idx]
+        scene_dir, split, subtile_index = self._scenes[idx]
         data = load_pointcept_scene(scene_dir)
 
         if self.pre_filter and self.pre_filter(data):
             return None
+
+        if subtile_index is not None:
+            data.subtile_index = subtile_index
 
         transform = self.train_transform
         if split in ("val", "test"):
@@ -228,7 +256,11 @@ class PointceptNpyDataset(Dataset):
         return data
 
     def _indices_for_split(self, split: SPLIT_TYPE) -> List[int]:
-        return [idx for idx, (_, scene_split) in enumerate(self._scenes) if scene_split == split]
+        return [
+            idx
+            for idx, (_, scene_split, _) in enumerate(self._scenes)
+            if scene_split == split
+        ]
 
     @property
     def traindata(self):

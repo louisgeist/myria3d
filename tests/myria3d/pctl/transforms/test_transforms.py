@@ -6,6 +6,7 @@ import torch_geometric
 from myria3d.pctl.transforms.transforms import (
     DropPointsByClass,
     MinimumNumNodes,
+    SubtileCrop,
     TargetTransform,
     subsample_data,
 )
@@ -96,6 +97,54 @@ def test_subsample_data(x, idx, choice, nb_out_nodes):
     assert isinstance(transformed_data.idx_in_original_cloud, np.ndarray)
     # Check that "idx_in_original_cloud" key is not modified
     assert transformed_data.idx_in_original_cloud.shape[0] == num_nodes
+
+
+def _synthetic_tile_data(num_per_side: int = 51) -> torch_geometric.data.Data:
+    xs = np.linspace(0.0, 100.0, num_per_side)
+    ys = np.linspace(0.0, 100.0, num_per_side)
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    pos = torch.from_numpy(
+        np.stack([grid_x.ravel(), grid_y.ravel(), np.zeros(grid_x.size)], axis=1).astype(
+            np.float32
+        )
+    )
+    x = torch.rand((pos.size(0), 3))
+    idx = np.arange(pos.size(0))
+    return torch_geometric.data.Data(pos=pos, x=x, idx_in_original_cloud=idx)
+
+
+def test_SubtileCrop_fixed_index():
+    data = _synthetic_tile_data()
+    data.subtile_index = 0
+    original_nodes = data.num_nodes
+    crop = SubtileCrop(tile_width=100, subtile_width=50, random=False)
+    cropped = crop(data.clone())
+    assert cropped is not None
+    assert cropped.num_nodes < original_nodes
+    assert cropped.num_nodes > 0
+    assert cropped.idx_in_original_cloud.shape[0] == cropped.num_nodes
+
+
+def test_SubtileCrop_random():
+    data = _synthetic_tile_data()
+    crop = SubtileCrop(tile_width=100, subtile_width=50, random=True)
+    cropped = crop(data.clone())
+    assert cropped is not None
+    assert cropped.num_nodes < data.num_nodes
+
+
+def test_SubtileCrop_uses_data_subtile_index():
+    data = _synthetic_tile_data()
+    crop = SubtileCrop(tile_width=100, subtile_width=50, random=False)
+    first_data = data.clone()
+    first_data.subtile_index = 0
+    second_data = data.clone()
+    second_data.subtile_index = 1
+    first = crop(first_data)
+    second = crop(second_data)
+    assert first.num_nodes > 0
+    assert second.num_nodes > 0
+    assert first.num_nodes != second.num_nodes or not torch.equal(first.pos, second.pos)
 
 
 def test_TargetTransform_with_valid_config():

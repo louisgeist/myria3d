@@ -32,7 +32,8 @@ datamodule:
   num_workers: 4
   data_root: /data/geist/Pointcept/data/flair3d_plus
   csv_manifest: ${datamodule.data_root}/raw/scene_split_manifest_D067.csv
-  subtile_width: 100
+  tile_width: 100
+  subtile_width: 50
   transforms:
     preparations:
       train:

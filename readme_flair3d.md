@@ -163,12 +163,12 @@ Prerequisites:
 - `coord.npy` present (completion marker)
 - Same manifest / exclusions as Pointcept (`missing_coord_tiles.details.csv`, `too_small_tiles.csv`)
 
-One dataloader sample = one full patch (~100 m). Downsampling is handled at train time (`GridSampling` + `MaximumNumNodes`). RGB stays in 0–255 float (Flair3D+ convention, not `/255`). Set `datamodule.subtile_width=100` for correct `NormalizePos`.
+Each Pointcept patch is ~100 m on disk; myria3d crops it to 50×50 m subtiles on the fly (same mosaic as the HDF5 pipeline). Train: one random quadrant per tile per epoch. Val/test: four deterministic quadrants per tile (`subtile_index` 0–3). Downsampling is handled at train time (`SubtileCrop` → `GridSampling` → `MaximumNumNodes`). RGB stays in 0–255 float (Flair3D+ convention, not `/255`). Set `datamodule.tile_width=100` and `datamodule.subtile_width=50` for correct `NormalizePos`.
 
-For faster validation (metrics on subsampled points, skip full-res KNN):
+For faster validation (metrics on subsampled points, skip full-res KNN) while keeping full-res test metrics:
 
 ```bash
-model.interpolate_at_eval=false
+model.interpolate_at_val=false
 ```
 
 ### Key config files

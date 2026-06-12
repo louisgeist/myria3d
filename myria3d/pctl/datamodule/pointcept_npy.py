@@ -23,7 +23,9 @@ class PointceptNpyDatamodule(LightningDataModule):
         csv_manifest: str,
         excluded_tiles_details_csv: Optional[str] = None,
         too_small_tiles_manifest: Optional[str] = None,
-        subtile_width: Number = 100,
+        tile_width: Number = 100,
+        subtile_width: Number = 50,
+        subtile_overlap: Number = 0,
         pre_filter: Optional[Callable] = pre_filter_below_n_points,
         batch_size: int = 12,
         num_workers: int = 1,
@@ -36,7 +38,9 @@ class PointceptNpyDatamodule(LightningDataModule):
         self.csv_manifest = csv_manifest
         self.excluded_tiles_details_csv = excluded_tiles_details_csv
         self.too_small_tiles_manifest = too_small_tiles_manifest
+        self.tile_width = tile_width
         self.subtile_width = subtile_width
+        self.subtile_overlap = subtile_overlap
         self.pre_filter = pre_filter
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -74,6 +78,9 @@ class PointceptNpyDatamodule(LightningDataModule):
             csv_manifest=self.csv_manifest,
             excluded_tiles_details_csv=self.excluded_tiles_details_csv,
             too_small_tiles_manifest=self.too_small_tiles_manifest,
+            tile_width=self.tile_width,
+            subtile_width=self.subtile_width,
+            subtile_overlap=self.subtile_overlap,
             pre_filter=self.pre_filter,
             train_transform=self.train_transform,
             eval_transform=self.eval_transform,

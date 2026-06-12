@@ -1,7 +1,14 @@
-# Preparations for Flair3D+ multitask (segment + raster-derived targets).
+# Preparations for Flair3D+ multitask (100 m tiles cropped to 50 m subtiles on the fly).
+# 50m to reproduce myria3d pipeline.
 voxel: 0.1
 
 train:
+  SubtileCrop:
+    _target_: myria3d.pctl.transforms.transforms.SubtileCrop
+    tile_width: "${datamodule.tile_width}"
+    subtile_width: "${datamodule.subtile_width}"
+    random: true
+
   DropPointsByClass:
     _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
 
@@ -31,6 +38,12 @@ train:
     std: 0.1
 
 eval:
+  SubtileCrop:
+    _target_: myria3d.pctl.transforms.transforms.SubtileCrop
+    tile_width: "${datamodule.tile_width}"
+    subtile_width: "${datamodule.subtile_width}"
+    random: false
+
   DropPointsByClass:
     _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
 

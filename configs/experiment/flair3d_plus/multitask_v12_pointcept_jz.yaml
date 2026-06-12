@@ -32,7 +32,8 @@ datamodule:
   num_workers: 4
   data_root: /lustre/fsn1/projects/rech/unv/usi32yh/data_pointcept/flair3d_plus
   csv_manifest: ${datamodule.data_root}/raw/scene_split_manifest.csv
-  subtile_width: 100
+  tile_width: 100
+  subtile_width: 50
   transforms:
     preparations:
       train:
