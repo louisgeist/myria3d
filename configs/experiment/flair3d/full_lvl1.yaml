@@ -8,6 +8,7 @@ defaults:
   - override /dataset_description: flair3d_lvl1.yaml
 
 model:
+  lr: 1e-3
   criterion:
     ignore_index: 3 # num_classes - 1
   

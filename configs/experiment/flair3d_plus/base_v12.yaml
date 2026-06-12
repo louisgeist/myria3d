@@ -9,6 +9,7 @@ defaults:
   - override /datamodule/transforms/preparations: points_budget_flair3d_plus.yaml
 
 model:
+  lr: 1e-3
   num_classes: 16
   criterion:
     ignore_index: 15
