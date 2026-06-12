@@ -23,6 +23,7 @@ from pytorch_lightning.loggers.logger import Logger
 
 from myria3d.models.model import Model
 from myria3d.utils import utils
+from myria3d.utils.training_schedule import resolve_training_schedule
 from run import TASK_NAMES
 
 log = utils.get_logger(__name__)
@@ -70,6 +71,8 @@ def train(config: DictConfig) -> Trainer:
     # Set seed for random number generators in pytorch, numpy and python.random
     if "seed" in config:
         seed_everything(config.seed, workers=True)
+
+    resolve_training_schedule(config)
 
     # Init lightning datamodule
     log.info(f"Instantiating datamodule <{config.datamodule._target_}>")

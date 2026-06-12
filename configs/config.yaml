@@ -25,6 +25,7 @@ ignore_warnings: True
 defaults:
   - _self_  # for hydra legacy reasons
 
+  - training_schedule: default.yaml
   - trainer: default.yaml
   - datamodule: hdf5_datamodule.yaml
   - dataset_description: 20220607_151_dalles_proto.yaml  # describes input features and classes

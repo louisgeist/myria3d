@@ -165,18 +165,46 @@ Prerequisites:
 
 Each Pointcept patch is ~100 m on disk; myria3d crops it to 50×50 m subtiles on the fly (same mosaic as the HDF5 pipeline). Train: one random quadrant per tile per epoch. Val/test: four deterministic quadrants per tile (`subtile_index` 0–3). Downsampling is handled at train time (`SubtileCrop` → `GridSampling` → `MaximumNumNodes`). RGB stays in 0–255 float (Flair3D+ convention, not `/255`). Set `datamodule.tile_width=100` and `datamodule.subtile_width=50` for correct `NormalizePos`.
 
+**Perf note:** val/test reload the full `.npy` scene once per quadrant (4× I/O per tile). Usually negligible vs GPU forward (OS page cache helps: quadrants are consecutive, no val shuffle). If val I/O becomes a bottleneck, add a per-scene in-memory cache in `PointceptNpyDataset`.
+
 For faster validation (metrics on subsampled points, skip full-res KNN) while keeping full-res test metrics:
 
 ```bash
 model.interpolate_at_val=false
 ```
 
+#### Iter-limited training schedule (Pointcept-compatible)
+
+The Flair3D+ train set is very large. By default, `multitask_v12_pointcept` uses **iter-limited** mode (same semantics as Pointcept): one training epoch is a fixed number of optimizer steps, not a full dataset pass.
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `total_iters` | `10000` | Total optimizer steps for the run |
+| `iter_per_epoch` | `1000` | Batch steps per training epoch |
+| `eval_every` | `5` | Validate every N training epochs (last epoch always validated) |
+
+Derived values: `num_epochs = total_iters // iter_per_epoch` (exact division required). Example with defaults: 10 epochs × 1000 steps = 10 000 steps; validation at epochs 5 and 10.
+
+Override from CLI:
+
+```bash
+python run.py experiment=flair3d_plus/multitask_v12_pointcept \
+  total_iters=10000 iter_per_epoch=1000 eval_every=5 \
+  datamodule.data_root=/data/geist/Pointcept/data/flair3d_plus \
+  datamodule.csv_manifest=/data/geist/Pointcept/data/flair3d_plus/raw/scene_split_manifest_D067.csv
+```
+
+To use classic epoch-based training instead, set `total_iters=null` and configure `trainer.max_epochs` explicitly.
+
+**Callbacks:** `early_stopping.patience` and `ReduceLROnPlateau.patience` count **validation events**, not training epochs. With `eval_every=5`, `patience=6` means 6 validations ≈ 30 training epochs (30 000 steps with default `iter_per_epoch`).
+
 ### Key config files
 
 | File | Role |
 |------|------|
 | `configs/experiment/flair3d_plus/multitask_v12.yaml` | Experiment entry point (HDF5 pipeline) |
-| `configs/experiment/flair3d_plus/multitask_v12_pointcept.yaml` | Multitask from Pointcept `.npy` tiles |
+| `configs/experiment/flair3d_plus/multitask_v12_pointcept.yaml` | Multitask from Pointcept `.npy` tiles (iter-limited by default) |
+| `configs/training_schedule/default.yaml` | `total_iters`, `iter_per_epoch`, `eval_every` defaults |
 | `configs/datamodule/pointcept_npy_datamodule.yaml` | Datamodule for Pointcept preprocessed data |
 | `configs/dataset_description/flair3d_plus_multitask.yaml` | Task dims, weights, elevation scale |
 | `configs/model/pyg_randla_net_multitask_model.yaml` | `PyGRandLANetMultiTask` hparams |
@@ -192,6 +220,8 @@ model.interpolate_at_val=false
 | HDF5 create/load | `myria3d/pctl/dataset/hdf5.py` |
 | Pointcept `.npy` loader | `myria3d/pctl/dataset/pointcept_npy.py` |
 | Pointcept datamodule | `myria3d/pctl/datamodule/pointcept_npy.py` |
+| Iter-limited sampler | `myria3d/pctl/dataloader/iter_limited_sampler.py` |
+| Training schedule resolver | `myria3d/utils/training_schedule.py` |
 | Multitask backbone | `myria3d/models/modules/pyg_randla_net_multitask.py` |
 | Lightning module | `myria3d/models/multitask_model.py` |
 | Metrics callback | `myria3d/callbacks/multitask_metric_callbacks.py` |
