@@ -1,9 +1,15 @@
 from typing import Dict, List, Optional
 
+import numpy as np
 import torch
 from pytorch_lightning import Callback
 from torchmetrics import JaccardIndex, MeanAbsoluteError, MeanSquaredError
 
+from myria3d.models.dilated_metrics import (
+    dilated_prf_enabled,
+    dilated_precision_recall_counts,
+    precision_recall_f1,
+)
 from myria3d.models.losses import (
     abs_freq_error_rows,
     kl_divergence_rows,
@@ -94,6 +100,10 @@ class MultiTaskMetrics(Callback):
                 continue
             num_classes = int(task_config["num_classes"])
             ignore_index = int(task_config.get("ignore_index", num_classes - 1))
+            # torchmetrics JaccardIndex indexes `ignore_index` into a num_classes
+            # confusion matrix. pixel_semantic void (2) is outside {0, 1} — filter
+            # those labels before update instead of passing an OOB ignore_index.
+            tm_ignore = ignore_index if 0 <= ignore_index < num_classes else None
             self.class_names_by_task[task_name] = _class_names_for_task(
                 task_name, task_config, self.classification_dict
             )
@@ -102,14 +112,14 @@ class MultiTaskMetrics(Callback):
                     task="multiclass",
                     num_classes=num_classes,
                     average="macro",
-                    ignore_index=ignore_index,
+                    ignore_index=tm_ignore,
                 )
             for phase in self.semantic_iou_by_class:
                 self.semantic_iou_by_class[phase][task_name] = JaccardIndex(
                     task="multiclass",
                     num_classes=num_classes,
                     average=None,
-                    ignore_index=ignore_index,
+                    ignore_index=tm_ignore,
                 )
 
         self.elevation_mae = {phase: MeanAbsoluteError() for phase in _PHASES}
@@ -121,6 +131,19 @@ class MultiTaskMetrics(Callback):
             for task_name, task_config in task_configs.items()
             if task_config.get("task_type", "semantic") == "tile_distribution"
         ]
+        self.pixel_semantic_tasks: List[str] = [
+            task_name
+            for task_name, task_config in task_configs.items()
+            if task_config.get("task_type", "semantic") == "pixel_semantic"
+        ]
+        zeros = {phase: {t: 0.0 for t in self.pixel_semantic_tasks} for phase in _PHASES}
+        self._prf_tp = {phase: dict(d) for phase, d in zeros.items()}
+        self._prf_fp = {phase: dict(d) for phase, d in zeros.items()}
+        self._prf_fn = {phase: dict(d) for phase, d in zeros.items()}
+        self._dilated_p_num = {phase: dict(d) for phase, d in zeros.items()}
+        self._dilated_p_denom = {phase: dict(d) for phase, d in zeros.items()}
+        self._dilated_r_num = {phase: dict(d) for phase, d in zeros.items()}
+        self._dilated_r_denom = {phase: dict(d) for phase, d in zeros.items()}
         self._kl_weighted_sum: Dict[str, Dict[str, float]] = {
             phase: {task_name: 0.0 for task_name in self.tile_distribution_tasks}
             for phase in _PHASES
@@ -145,24 +168,100 @@ class MultiTaskMetrics(Callback):
                 )
 
     def _iou_pred_target(self, task_name: str, preds, targets, batch):
-        """Argmax labels (and matching targets), pooling pixel_semantic tasks to cells."""
+        """Argmax labels (and matching targets), pooling pixel_semantic tasks to cells.
+
+        Returns ``(pred_labels, targets, cell_id, batch_index)``. ``cell_id`` /
+        ``batch_index`` are None for per-point semantic tasks.
+        """
         task_type = self.task_configs[task_name].get("task_type", "semantic")
         if task_type == "pixel_semantic" and batch is not None:
             cell_id = getattr(batch, f"{task_name}_cell_id", None)
             if cell_id is not None:
                 pooling = self.task_configs[task_name].get("pooling", "mean")
-                pooled_preds, pooled_targets = pool_points_by_cell(
-                    preds.detach(),
-                    cell_id.to(preds.device),
-                    targets.long().to(preds.device),
-                    batch.batch.to(preds.device),
-                    pooling=pooling,
+                pooled_preds, pooled_targets, pooled_cell_id, pooled_batch = (
+                    pool_points_by_cell(
+                        preds.detach(),
+                        cell_id.to(preds.device),
+                        targets.long().to(preds.device),
+                        batch.batch.to(preds.device),
+                        pooling=pooling,
+                    )
                 )
                 if pooled_preds.size(0) == 0:
-                    return None, None
-                return torch.argmax(pooled_preds, dim=1), pooled_targets
+                    return None, None, None, None
+                return (
+                    torch.argmax(pooled_preds, dim=1),
+                    pooled_targets,
+                    pooled_cell_id,
+                    pooled_batch,
+                )
         pred_labels = torch.argmax(preds.detach(), dim=1)
-        return pred_labels, targets.long().to(pred_labels.device)
+        return pred_labels, targets.long().to(pred_labels.device), None, None
+
+    @staticmethod
+    def _graph_hw(batch, task_name: str, graph_idx: int) -> tuple:
+        height = getattr(batch, f"{task_name}_raster_h", None)
+        width = getattr(batch, f"{task_name}_raster_w", None)
+        if height is None or width is None:
+            return 0, 0
+        return int(height.reshape(-1)[graph_idx].item()), int(
+            width.reshape(-1)[graph_idx].item()
+        )
+
+    def _update_pixel_prf(
+        self,
+        phase: str,
+        task_name: str,
+        pred_labels,
+        targets,
+        cell_id,
+        batch_index,
+        batch,
+    ) -> None:
+        task_config = self.task_configs[task_name]
+        ignore_index = int(task_config.get("ignore_index", -1))
+        fg_index = int(task_config.get("fg_index", 1))
+        valid = targets != ignore_index
+        pred_fg = (pred_labels == fg_index) & valid
+        gt_fg = (targets == fg_index) & valid
+        self._prf_tp[phase][task_name] += float((pred_fg & gt_fg).sum().item())
+        self._prf_fp[phase][task_name] += float((pred_fg & ~gt_fg).sum().item())
+        self._prf_fn[phase][task_name] += float((~pred_fg & gt_fg).sum().item())
+
+        if (
+            cell_id is None
+            or batch is None
+            or not dilated_prf_enabled(task_config)
+        ):
+            return
+        radius_px = int(task_config.get("buffer_radius_px", 3))
+        pred_np = pred_labels.detach().cpu().numpy()
+        tgt_np = targets.detach().cpu().numpy()
+        cid_np = cell_id.detach().cpu().numpy().astype(np.int64)
+        b_np = batch_index.detach().cpu().numpy().astype(np.int64)
+        for graph_idx in np.unique(b_np):
+            height, width = self._graph_hw(batch, task_name, int(graph_idx))
+            if height <= 0 or width <= 0:
+                continue
+            sel = b_np == graph_idx
+            rows = cid_np[sel] // width
+            cols = cid_np[sel] % width
+            in_grid = (rows >= 0) & (rows < height) & (cols >= 0) & (cols < width)
+            scored = in_grid & (tgt_np[sel] != ignore_index)
+            pred_grid = np.zeros((height, width), dtype=bool)
+            gt_grid = np.zeros((height, width), dtype=bool)
+            valid_grid = np.zeros((height, width), dtype=bool)
+            rr, cc = rows[scored], cols[scored]
+            valid_grid[rr, cc] = True
+            pred_grid[rr, cc] = pred_np[sel][scored] == fg_index
+            gt_grid[rr, cc] = tgt_np[sel][scored] == fg_index
+            p_num, p_denom, r_num, r_denom = dilated_precision_recall_counts(
+                pred_grid, gt_grid, valid_grid, radius_px=radius_px
+            )
+            self._dilated_p_num[phase][task_name] += p_num
+            self._dilated_p_denom[phase][task_name] += p_denom
+            self._dilated_r_num[phase][task_name] += r_num
+            self._dilated_r_denom[phase][task_name] += r_denom
 
     def _end_of_batch(self, phase: str, outputs: dict, batch=None):
         preds_by_task = outputs["outputs"]
@@ -173,15 +272,32 @@ class MultiTaskMetrics(Callback):
             targets = targets_by_task.get(task_name)
             if preds is None or targets is None:
                 continue
-            pred_labels, metric_targets = self._iou_pred_target(
+            pred_labels, metric_targets, cell_id, batch_index = self._iou_pred_target(
                 task_name, preds, targets, batch
             )
             if pred_labels is None:
                 continue
-            metric.to(pred_labels.device)(pred_labels, metric_targets)
-            by_class = self.semantic_iou_by_class.get(phase, {}).get(task_name)
-            if by_class is not None:
-                by_class.to(pred_labels.device)(pred_labels, metric_targets)
+            ignore_index = int(self.task_configs[task_name].get("ignore_index", -1))
+            if ignore_index >= 0:
+                iou_keep = metric_targets != ignore_index
+                iou_pred, iou_tgt = pred_labels[iou_keep], metric_targets[iou_keep]
+            else:
+                iou_pred, iou_tgt = pred_labels, metric_targets
+            if iou_pred.numel() > 0:
+                metric.to(iou_pred.device)(iou_pred, iou_tgt)
+                by_class = self.semantic_iou_by_class.get(phase, {}).get(task_name)
+                if by_class is not None:
+                    by_class.to(iou_pred.device)(iou_pred, iou_tgt)
+            if task_name in self.pixel_semantic_tasks:
+                self._update_pixel_prf(
+                    phase,
+                    task_name,
+                    pred_labels,
+                    metric_targets,
+                    cell_id,
+                    batch_index,
+                    batch,
+                )
 
         for task_name in self.tile_distribution_tasks:
             preds = preds_by_task.get(task_name)
@@ -270,6 +386,64 @@ class MultiTaskMetrics(Callback):
                         on_step=False,
                     )
                 metric.reset()
+
+        for task_name in self.pixel_semantic_tasks:
+            tp = self._prf_tp[phase][task_name]
+            fp = self._prf_fp[phase][task_name]
+            fn = self._prf_fn[phase][task_name]
+            if tp + fp + fn > 0:
+                precision, recall, f1 = precision_recall_f1(tp, tp + fp, tp, tp + fn)
+                pl_module.log(
+                    metric_tag(phase, "precision", task=task_name),
+                    precision,
+                    on_epoch=True,
+                    on_step=False,
+                )
+                pl_module.log(
+                    metric_tag(phase, "recall", task=task_name),
+                    recall,
+                    on_epoch=True,
+                    on_step=False,
+                )
+                pl_module.log(
+                    metric_tag(phase, "f1", task=task_name),
+                    f1,
+                    on_epoch=True,
+                    on_step=False,
+                )
+            self._prf_tp[phase][task_name] = 0.0
+            self._prf_fp[phase][task_name] = 0.0
+            self._prf_fn[phase][task_name] = 0.0
+
+            if dilated_prf_enabled(self.task_configs[task_name]):
+                p_num = self._dilated_p_num[phase][task_name]
+                p_denom = self._dilated_p_denom[phase][task_name]
+                r_num = self._dilated_r_num[phase][task_name]
+                r_denom = self._dilated_r_denom[phase][task_name]
+                if p_denom + r_denom > 0:
+                    d_p, d_r, d_f1 = precision_recall_f1(p_num, p_denom, r_num, r_denom)
+                    pl_module.log(
+                        metric_tag(phase, "dilated_precision", task=task_name),
+                        d_p,
+                        on_epoch=True,
+                        on_step=False,
+                    )
+                    pl_module.log(
+                        metric_tag(phase, "dilated_recall", task=task_name),
+                        d_r,
+                        on_epoch=True,
+                        on_step=False,
+                    )
+                    pl_module.log(
+                        metric_tag(phase, "dilated_f1", task=task_name),
+                        d_f1,
+                        on_epoch=True,
+                        on_step=False,
+                    )
+                self._dilated_p_num[phase][task_name] = 0.0
+                self._dilated_p_denom[phase][task_name] = 0.0
+                self._dilated_r_num[phase][task_name] = 0.0
+                self._dilated_r_denom[phase][task_name] = 0.0
 
         if self._elevation_updated[phase]:
             mae = self.elevation_mae[phase].compute()

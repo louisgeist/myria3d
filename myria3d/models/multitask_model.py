@@ -293,7 +293,7 @@ class MultiTaskModel(LightningModule):
         cell_id = getattr(batch, f"{task_name}_cell_id").to(preds.device)
         batch_index = batch.batch.to(preds.device)
         pooling = self.task_configs[task_name].get("pooling", "mean")
-        pooled_preds, pooled_targets = pool_points_by_cell(
+        pooled_preds, pooled_targets, _, _ = pool_points_by_cell(
             preds, cell_id, targets.long(), batch_index, pooling=pooling
         )
         if pooled_preds.size(0) == 0:
