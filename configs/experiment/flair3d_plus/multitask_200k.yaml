@@ -1,0 +1,12 @@
+# @package _global_
+# Flair3D+ multitask, 200k-optimizer-step production run. Extends flair3d_plus/multitask
+# (same datamodule/model/callbacks/logger wiring) with a longer iter-limited schedule.
+# `model.lr` stays the myria3d base default (1e-3) unless overridden on the CLI, e.g.
+# `model.lr=2e-3` — see scripts/jz/run_flair3d_plus_multitask_200k.slurm.
+
+defaults:
+  - flair3d_plus/multitask
+
+# 200 epochs x 1000 steps = 200_000 steps total (iter_per_epoch/eval_every unchanged:
+# still 1000 / 5, so 40 validations over the run).
+total_iters: 200_000
