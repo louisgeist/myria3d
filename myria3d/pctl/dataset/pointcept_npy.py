@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import os.path as osp
 from numbers import Number
@@ -14,7 +15,11 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
 from myria3d.pctl.dataset.flair3d import load_excluded_tiles_from_details_csv
-from myria3d.pctl.dataset.flair3d_label_remap import apply_remap, get_definition
+from myria3d.pctl.dataset.flair3d_label_remap import (
+    NATURAL_HABITAT_AXIS_DEFINITIONS,
+    apply_remap,
+    get_definition,
+)
 from myria3d.pctl.dataset.utils import (
     SPLIT_TYPE,
     get_num_subtiles,
@@ -29,19 +34,31 @@ SceneEntry = Tuple[str, SPLIT_TYPE, Optional[int]]
 REQUIRED_ASSETS = ("coord",)
 MULTITASK_TARGET_FILES = (
     ("segment", "y"),
-    ("forest", "y_forest"),
-    ("land_use", "y_land_use"),
-    ("natural_habitat", "y_natural_habitat"),
     ("elevation", "y_elevation"),
 )
-# Void / missing fills aligned with configs/dataset_description/flair3d_plus_multitask.yaml
-# and flair3d.py raster preprocessing (missing GeoTIFF → all ignore_index).
+# Void / missing fills aligned with configs/dataset_description/flair3d_plus_multitask.yaml.
 MULTITASK_MISSING_FILLS = {
     "y": 15,
-    "y_forest": 2,
-    "y_land_use": 10,
-    "y_natural_habitat": 11,
 }
+
+# Rasters preprocessed by Pointcept's own rasterize_forest.py / rasterize_network.py
+# scripts (run separately, outside myria3d): (npy filename stem, meta.json key, myria3d
+# task name, raster channel name or None for a single-channel raster). Loaded as
+# pixel_semantic targets — see MultiTaskModel / pixel_pooling.py for how per-point
+# predictions get pooled back up to raster-cell resolution.
+PIXEL_SEMANTIC_TARGET_FILES = (
+    ("forest_2d", "forest_2d", "forest_2d", None),
+    ("network", "network", "roads", "ROADS"),
+)
+# ignore_index per pixel_semantic task, aligned with configs/dataset_description/flair3d_plus_multitask.yaml.
+PIXEL_SEMANTIC_MISSING_FILLS = {
+    "forest_2d": 2,
+    "roads": 2,
+}
+
+# Raw CarHab id used to fill natural_habitat when natural_habitat.npy is absent — void in
+# every axis LUT (see flair3d_label_remap.py), matching Pointcept's own missing-fill sentinel.
+NATURAL_HABITAT_MISSING_FILL_RAW_ID = 43
 
 
 def load_too_small_tiles_from_csv(csv_path: Optional[str]) -> Set[Tuple[str, str]]:
@@ -152,6 +169,47 @@ def _build_feature_matrix(
     return x, x_features_names
 
 
+def _load_scene_meta(scene_dir: str) -> dict:
+    meta_path = osp.join(scene_dir, "meta.json")
+    if not osp.isfile(meta_path):
+        return {}
+    with open(meta_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _assign_raster_cells(
+    pos_xy: np.ndarray,
+    raster_2d: np.ndarray,
+    raster_meta: dict,
+    ignore_index: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Map absolute Lambert (x, y) coordinates to a raster cell id + that cell's label.
+
+    `raster_2d` is a single-channel (H, W) array. Points outside the raster grid (or
+    when the raster/meta is entirely absent, via a zero-size raster_2d) get cell_id=-1
+    and label=ignore_index — pool_points_by_cell drops cell_id=-1 points.
+    """
+    num_points = pos_xy.shape[0]
+    cell_id = np.full(num_points, -1, dtype=np.int64)
+    label = np.full(num_points, ignore_index, dtype=np.int64)
+    if raster_2d.size == 0:
+        return cell_id, label
+
+    origin_x = float(raster_meta["origin_x"])
+    origin_y = float(raster_meta["origin_y"])
+    pixel_m = float(raster_meta["pixel_m"])
+    height, width = raster_2d.shape
+
+    col = np.floor((pos_xy[:, 0] - origin_x) / pixel_m).astype(np.int64)
+    row = np.floor((pos_xy[:, 1] - origin_y) / pixel_m).astype(np.int64)
+    in_grid = (row >= 0) & (row < height) & (col >= 0) & (col < width)
+    if np.any(in_grid):
+        r, c = row[in_grid], col[in_grid]
+        cell_id[in_grid] = r * width + c
+        label[in_grid] = raster_2d[r, c]
+    return cell_id, label
+
+
 def load_pointcept_scene(scene_dir: str) -> Data:
     """Load one Pointcept-preprocessed scene folder into a PyG Data object."""
     coord_path = osp.join(scene_dir, "coord.npy")
@@ -202,6 +260,56 @@ def load_pointcept_scene(scene_dir: str) -> Data:
                 MULTITASK_MISSING_FILLS[data_key],
                 dtype=torch.int64,
             )
+
+    # Pointcept stores local `coord.npy` (float32) plus `coord_translation.npy`
+    # (float64 Lambert offset). Raster origins in meta.json are absolute, so cell
+    # assignment must reconstruct abs_xy the same way as Pointcept's ExtractAbsXY.
+    pos_xy = pos[:, :2].astype(np.float64, copy=True)
+    transl_path = osp.join(scene_dir, "coord_translation.npy")
+    if osp.isfile(transl_path):
+        transl = np.load(transl_path)
+        if transl.shape[-1] < 2:
+            raise ValueError(
+                f"coord_translation.npy must have at least 2 values, got {transl.shape} "
+                f"in {scene_dir}"
+            )
+        pos_xy = pos_xy + np.asarray(transl, dtype=np.float64).reshape(-1)[:2]
+    scene_meta = None  # lazy-loaded, only needed once a raster asset is actually found
+    for asset_name, meta_key, task_name, channel_name in PIXEL_SEMANTIC_TARGET_FILES:
+        asset_path = osp.join(scene_dir, f"{asset_name}.npy")
+        ignore_index = PIXEL_SEMANTIC_MISSING_FILLS[task_name]
+        if osp.isfile(asset_path):
+            if scene_meta is None:
+                scene_meta = _load_scene_meta(scene_dir)
+            if meta_key not in scene_meta:
+                raise ValueError(
+                    f"{asset_name}.npy exists in {scene_dir} but meta.json is missing "
+                    f"its '{meta_key}' raster-geometry entry."
+                )
+            raster_meta = scene_meta[meta_key]
+            raster = np.load(asset_path)
+            raster_2d = (
+                raster[raster_meta["channel_order"].index(channel_name)]
+                if channel_name is not None
+                else raster[0]
+            )
+            cell_id, label = _assign_raster_cells(pos_xy, raster_2d, raster_meta, ignore_index)
+        else:
+            cell_id = np.full(num_points, -1, dtype=np.int64)
+            label = np.full(num_points, ignore_index, dtype=np.int64)
+        kwargs[f"{task_name}_cell_id"] = torch.from_numpy(cell_id)
+        kwargs[f"y_{task_name}"] = torch.from_numpy(label)
+
+    # natural_habitat.npy stores raw (near-raw) CarHab ids; remapped here into 4
+    # low-cardinality ecological axes (tile_distribution targets), never used directly.
+    nh_path = osp.join(scene_dir, "natural_habitat.npy")
+    if osp.isfile(nh_path):
+        nh_raw = np.load(nh_path).reshape(-1).astype(np.int64, copy=False)
+    else:
+        nh_raw = np.full(num_points, NATURAL_HABITAT_MISSING_FILL_RAW_ID, dtype=np.int64)
+    for task_name, definition_name in NATURAL_HABITAT_AXIS_DEFINITIONS.items():
+        remapped = apply_remap(nh_raw, get_definition("natural_habitat", definition_name))
+        kwargs[f"y_{task_name}"] = torch.from_numpy(remapped.astype(np.int64, copy=False))
 
     return Data(**kwargs)
 

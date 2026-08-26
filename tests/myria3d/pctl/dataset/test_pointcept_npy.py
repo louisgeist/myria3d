@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 
 import numpy as np
@@ -79,3 +80,95 @@ def test_load_pointcept_scene_merges_buildings_and_maps_void(tmp_path):
     data = load_pointcept_scene(str(scene_dir))
 
     assert torch.equal(data.y, torch.tensor([0, 0, 0, 15]))
+
+
+def _write_raster_meta(scene_dir, *, origin_x=0.0, origin_y=0.0, pixel_m=1.0):
+    forest = np.array([[[0, 1], [2, 1]]], dtype=np.uint8)  # (1, 2, 2)
+    network = np.zeros((3, 2, 2), dtype=np.uint8)
+    network[0, 0, 1] = 1  # ROADS at (row=0, col=1)
+    np.save(scene_dir / "forest_2d.npy", forest)
+    np.save(scene_dir / "network.npy", network)
+    meta = {
+        "forest_2d": {
+            "origin_x": origin_x,
+            "origin_y": origin_y,
+            "pixel_m": pixel_m,
+        },
+        "network": {
+            "origin_x": origin_x,
+            "origin_y": origin_y,
+            "pixel_m": pixel_m,
+            "channel_order": ["ROADS", "RAILROADS", "TRANSMISSION_LINES"],
+        },
+    }
+    with open(scene_dir / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+
+
+def test_load_pointcept_scene_pixel_semantic_and_nathab_axes(tmp_path):
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    # Four points sitting in the four 1 m raster cells of a 2x2 grid starting at (0, 0).
+    pos = np.array(
+        [[0.5, 0.5, 0.0], [1.5, 0.5, 0.0], [0.5, 1.5, 0.0], [1.5, 1.5, 0.0]],
+        dtype=np.float32,
+    )
+    np.save(scene_dir / "coord.npy", pos)
+    _write_raster_meta(scene_dir)
+    # Raw CarHab: open-temperate-acid-humid (0) and void-sentinel (43).
+    np.save(scene_dir / "natural_habitat.npy", np.array([0, 0, 43, 43], dtype=np.int64))
+
+    data = load_pointcept_scene(str(scene_dir))
+
+    assert torch.equal(data.y_forest_2d, torch.tensor([0, 1, 2, 1]))
+    assert torch.equal(data.forest_2d_cell_id, torch.tensor([0, 1, 2, 3]))
+    assert torch.equal(data.y_roads, torch.tensor([0, 1, 0, 0]))
+    assert torch.equal(data.roads_cell_id, torch.tensor([0, 1, 2, 3]))
+    # Axis 0 (open / humid / acid / temperate) vs void on every axis.
+    assert torch.equal(data.y_nathab_habitat_type, torch.tensor([0, 0, 4, 4]))
+    assert torch.equal(data.y_nathab_moisture_regime, torch.tensor([0, 0, 3, 3]))
+    assert torch.equal(data.y_nathab_soil_chemistry, torch.tensor([0, 0, 2, 2]))
+    assert torch.equal(data.y_nathab_bioclimatic_zone, torch.tensor([0, 0, 3, 3]))
+
+
+def test_load_pointcept_scene_missing_raster_and_nathab_fallback(tmp_path):
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    np.save(scene_dir / "coord.npy", np.zeros((3, 3), dtype=np.float32))
+
+    data = load_pointcept_scene(str(scene_dir))
+
+    assert torch.equal(data.forest_2d_cell_id, torch.tensor([-1, -1, -1]))
+    assert torch.equal(data.y_forest_2d, torch.tensor([2, 2, 2]))
+    assert torch.equal(data.roads_cell_id, torch.tensor([-1, -1, -1]))
+    assert torch.equal(data.y_roads, torch.tensor([2, 2, 2]))
+    # Missing natural_habitat.npy is filled with raw id 43 (void on every axis).
+    assert torch.equal(data.y_nathab_habitat_type, torch.tensor([4, 4, 4]))
+    assert torch.equal(data.y_nathab_moisture_regime, torch.tensor([3, 3, 3]))
+    assert torch.equal(data.y_nathab_soil_chemistry, torch.tensor([2, 2, 2]))
+    assert torch.equal(data.y_nathab_bioclimatic_zone, torch.tensor([3, 3, 3]))
+
+
+def test_load_pointcept_scene_uses_coord_translation_for_raster_cells(tmp_path):
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    np.save(scene_dir / "coord.npy", np.array([[0.5, 0.5, 0.0]], dtype=np.float32))
+    np.save(scene_dir / "coord_translation.npy", np.array([1000.0, 2000.0, 0.0], dtype=np.float64))
+    np.save(scene_dir / "forest_2d.npy", np.array([[[7]]], dtype=np.uint8))
+    with open(scene_dir / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "forest_2d": {
+                    "origin_x": 1000.0,
+                    "origin_y": 2000.0,
+                    "pixel_m": 1.0,
+                }
+            },
+            f,
+        )
+
+    data = load_pointcept_scene(str(scene_dir))
+
+    assert torch.equal(data.forest_2d_cell_id, torch.tensor([0]))
+    assert torch.equal(data.y_forest_2d, torch.tensor([7]))
+

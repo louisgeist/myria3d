@@ -1,6 +1,6 @@
 # Flair3D+ with Flair3D-build labels
 
-This workflow trains on the full Flair3D+ dataset using precomputed semantic labels from [Flair3D-build](https://github.com/IGNF/Flair3D-build). Use **`label=v14`** in Flair3D-build (current); myria3d only reads the `semantic` field from the output PLY (16 classes including Void). Config and file names still say `v12` for historical reasons.
+This workflow trains on the full Flair3D+ dataset using precomputed semantic labels from [Flair3D-build](https://github.com/IGNF/Flair3D-build). Use **`label=v20`** in Flair3D-build (current); myria3d only reads the `semantic` field from the output PLY (16 classes including Void). Config and file names still say `v12` for historical reasons.
 
 The steps are the same on every machine:
 
@@ -93,7 +93,7 @@ After HDF5 creation, you may set `datamodule.data_dir` and `datamodule.split_csv
 
 ## Multitask
 
-See the repo guide [`readme_flair3d.md`](../../../readme_flair3d.md) (segment + forest + land_use + natural_habitat + elevation).
+See the repo guide [`readme_flair3d.md`](../../../readme_flair3d.md) (segment + forest_2d + roads + nathab axes + elevation).
 
 ---
 

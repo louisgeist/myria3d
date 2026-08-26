@@ -2,7 +2,7 @@
 
 Guide for training on Flair3D+ with myria3d: single-task semantic segmentation (PLY labels) and **multitask** (PLY + GeoTIFF rasters).
 
-Use **`label=v14`** in Flair3D-build. Config paths still say `v12` for historical reasons.
+Use **`label=v20`** in Flair3D-build. Config paths still say `v12` for historical reasons.
 
 Before any `python run.py` command, create a `.env` at the myria3d repo root:
 
@@ -103,27 +103,31 @@ sbatch scripts/jz/run_flair3d_plus_train.slurm
 
 ## Multitask
 
-Trains **five tasks** jointly with a shared RandLA-Net backbone:
+Two recipes share the same RandLA-Net backbone. The **Pointcept `.npy` pipeline** is the current default (`experiment=flair3d_plus/multitask_v12_pointcept*`):
 
-| Task | Source | Remap (Pointcept-aligned) | Output dim | `ignore_index` |
-|------|--------|---------------------------|------------|----------------|
-| `segment` | PLY `semantic` | default | 16 | 15 |
-| `forest` | GeoTIFF `FOREST` | default | 2 | 2 |
-| `land_use` | GeoTIFF `LAND_USE` | filtered | 10 | 10 |
-| `natural_habitat` | GeoTIFF `NATURAL_HABITAT` | by_habitat_x_domain | 11 | 11 |
-| `elevation` | GeoTIFF `DEM_ELEV` band 2 (DTM) | — (regression) | 1 | NaN masked |
+| Task | Source | Type | Output dim | `ignore_index` |
+|------|--------|------|------------|----------------|
+| `segment` | `segment.npy` (Flair3D-build v20) | per-point semantic | 16 | 15 |
+| `forest_2d` | `forest_2d.npy` (1 m raster) | pixel_semantic (mean-pool) | 2 | 2 |
+| `roads` | `network.npy` channel `ROADS` | pixel_semantic (max-pool) | 2 | 2 |
+| `nathab_habitat_type` | `natural_habitat.npy` → `by_habitat_type_ecological` | tile_distribution (WeightedKL) | 4 | 4 |
+| `nathab_moisture_regime` | same → `by_moisture_regime` | tile_distribution | 3 | 3 |
+| `nathab_soil_chemistry` | same → `by_soil_chemistry` | tile_distribution | 2 | 2 |
+| `nathab_bioclimatic_zone` | same → `by_climatic_domain` | tile_distribution | 3 | 3 |
+| `elevation` | `elevation.npy` (`z_lidar - DTM`) | per-point regression | 1 | NaN masked |
+
+`forest_2d.npy` / `network.npy` are produced by Pointcept's `rasterize_forest.py` / `rasterize_network.py` (run outside myria3d). Roads training is raster CE with foreground weight 5; graph APLS evaluation is a follow-up, not part of this recipe.
+
+The **HDF5 pipeline** (`configs/dataset_description/flair3d_plus_multitask_hdf5.yaml`) keeps `segment` + `elevation` only. There is currently no filled `experiment=flair3d_plus/multitask_v12` entry point for it.
 
 Elevation target: `z_lidar - DTM` (meters). Training uses scale `0.01` and `SmoothL1Loss`.
 
-### Raster layout
+### Raster layout (HDF5 elevation only)
 
 GeoTIFFs live under `datamodule.raster_root` (same tree as Pointcept):
 
 ```
-{raster_root}/FOREST/{dept_year}_FOREST/{roi}/{dept_year}_FOREST_{roi}_{scene_i_j}.tif
-{raster_root}/LAND_USE/...
-{raster_root}/NATURAL_HABITAT/...
-{raster_root}/DEM_ELEV/...
+{raster_root}/DEM_ELEV/{dept_year}_DEM_ELEV/{roi}/{dept_year}_DEM_ELEV_{roi}_{scene_i_j}.tif
 ```
 
 Stem rule: replace `_LIDARHD_` with `_{MODALITY}_` in the PLY filename.
@@ -206,7 +210,8 @@ To use classic epoch-based training instead, set `total_iters=null` and configur
 | `configs/experiment/flair3d_plus/multitask_v12_pointcept.yaml` | Multitask from Pointcept `.npy` tiles (iter-limited by default) |
 | `configs/training_schedule/default.yaml` | `total_iters`, `iter_per_epoch`, `eval_every` defaults |
 | `configs/datamodule/pointcept_npy_datamodule.yaml` | Datamodule for Pointcept preprocessed data |
-| `configs/dataset_description/flair3d_plus_multitask.yaml` | Task dims, weights, elevation scale |
+| `configs/dataset_description/flair3d_plus_multitask.yaml` | Pointcept-npy task dims, weights, elevation scale |
+| `configs/dataset_description/flair3d_plus_multitask_hdf5.yaml` | HDF5 pipeline: segment + elevation only |
 | `configs/model/pyg_randla_net_multitask_model.yaml` | `PyGRandLANetMultiTask` hparams |
 | `configs/model/multitask_default.yaml` | GradNorm-lite + task-weight defaults |
 | `configs/callbacks/multitask.yaml` | Per-task metrics, early stopping on `val/iou` (segment) |
@@ -224,6 +229,8 @@ To use classic epoch-based training instead, set `total_iters=null` and configur
 | Iter-limited sampler | `myria3d/pctl/dataloader/iter_limited_sampler.py` |
 | Training schedule resolver | `myria3d/utils/training_schedule.py` |
 | Multitask backbone | `myria3d/models/modules/pyg_randla_net_multitask.py` |
+| Pixel-semantic pooling | `myria3d/models/modules/pixel_pooling.py` |
+| Tile-distribution loss | `myria3d/models/losses.py` |
 | Lightning module | `myria3d/models/multitask_model.py` |
 | GradNorm-lite + diagnostic gradient-norm utilities | `myria3d/models/gradnorm_lite.py` |
 | Metrics callback | `myria3d/callbacks/multitask_metric_callbacks.py` |
@@ -239,9 +246,10 @@ mamba env update -f environment.yml
 ### Monitoring
 
 - Main metric: `val/iou` on **segment**
-- Per-task: `val/iou_forest`, `val/iou_land_use`, `val/iou_natural_habitat`
+- Pixel-semantic: `val/iou_forest_2d`, `val/iou_roads`
+- Nathab axes: `val/kl_nathab_habitat_type`, `val/kl_nathab_moisture_regime`, `val/kl_nathab_soil_chemistry`, `val/kl_nathab_bioclimatic_zone`
 - Regression: `val/elevation_mae`, `val/elevation_rmse`
-- Per-task losses: `train/loss_segment`, `train/loss_forest`, …
+- Per-task losses: `train/loss_segment`, `train/loss_forest_2d`, `train/loss_roads`, `train/loss_nathab_*`, …
 
 ### Loss balancing (GradNorm-lite)
 
@@ -258,9 +266,8 @@ train/loss = Σ_t  loss_t · task_weights[t] · (1 / max(EMA_t, grad_norm_lite_e
 
 Config (`configs/model/multitask_default.yaml`): `grad_norm_lite` (off by default),
 `grad_norm_lite_interval` (default 100), `grad_norm_lite_ema_alpha` (EMA smoothing, default 0.1),
-`grad_norm_lite_eps` (default 1e-3), `grad_norm_lite_task_groups` (optional `task -> group`
-map to pool correlated tasks' losses before probing — unused by default, all 5 Flair3D+ tasks are
-independent). Enabled in `configs/experiment/flair3d_plus/multitask_v12_pointcept_jz.yaml`.
+`grad_norm_lite_eps` (default 1e-3), `grad_norm_lite_task_groups` (the 4 nathab axes share one
+`nathab` group, matching Pointcept). Enabled in `configs/experiment/flair3d_plus/multitask_v12_pointcept_jz.yaml`.
 
 Logged keys: `train/grad_norm_lite_scale_{task}` (every step), `train/grad_norm_lite_norm_{task}`
 (only on measurement steps). A separate, diagnostic-only toggle `log_task_gradient_norms` (off by

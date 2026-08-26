@@ -28,7 +28,13 @@ grad_norm_lite: false
 grad_norm_lite_interval: 100
 grad_norm_lite_ema_alpha: 0.1
 grad_norm_lite_eps: 1e-3
-grad_norm_lite_task_groups: {}
+# Pool the 4 nathab axes into one GradNorm-lite group (Pointcept default). Extra
+# keys are ignored when a task is absent (e.g. the HDF5 segment+elevation recipe).
+grad_norm_lite_task_groups:
+  nathab_habitat_type: nathab
+  nathab_moisture_regime: nathab
+  nathab_soil_chemistry: nathab
+  nathab_bioclimatic_zone: nathab
 # Diagnostic-only per-task gradient norm / cosine-similarity logging (no effect on training).
 log_task_gradient_norms: false
 
@@ -40,15 +46,24 @@ criteria:
       _target_: torch.FloatTensor
       _args_:
         - ${dataset_description.class_weights}
-  forest:
+  forest_2d:
     _target_: torch.nn.CrossEntropyLoss
     ignore_index: 2
-  land_use:
+  roads:
     _target_: torch.nn.CrossEntropyLoss
-    ignore_index: 10
-  natural_habitat:
-    _target_: torch.nn.CrossEntropyLoss
-    ignore_index: 11
+    ignore_index: 2
+    weight:
+      _target_: torch.FloatTensor
+      _args_:
+        - [1.0, 5.0]
+  nathab_habitat_type:
+    _target_: myria3d.models.losses.WeightedKLDivLoss
+  nathab_moisture_regime:
+    _target_: myria3d.models.losses.WeightedKLDivLoss
+  nathab_soil_chemistry:
+    _target_: myria3d.models.losses.WeightedKLDivLoss
+  nathab_bioclimatic_zone:
+    _target_: myria3d.models.losses.WeightedKLDivLoss
   elevation:
     _target_: torch.nn.SmoothL1Loss
     beta: 0.01

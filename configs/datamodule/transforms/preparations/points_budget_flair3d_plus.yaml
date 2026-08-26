@@ -1,4 +1,4 @@
-# Preparations for Flair3D+ with Flair3D-build semantic labels (v14; v12-compatible).
+# Preparations for Flair3D+ with Flair3D-build semantic labels (v20; v12-compatible).
 # No COSIA/LidarHD fusion — labels come precomputed in the PLY ``semantic`` field.
 voxel: 0.25
 

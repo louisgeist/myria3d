@@ -110,11 +110,11 @@ class TestResolveGradNormLiteScales:
         ema.update({"nathab": 4.0})
         scales = resolve_grad_norm_lite_scales(
             ema,
-            ["forest", "land_use"],
-            task_groups={"forest": "nathab", "land_use": "nathab"},
+            ["forest", "axis_b"],
+            task_groups={"forest": "nathab", "axis_b": "nathab"},
         )
         assert scales["forest"] == pytest.approx(0.25)
-        assert scales["land_use"] == pytest.approx(0.25)
+        assert scales["axis_b"] == pytest.approx(0.25)
 
 
 class TestCombineWeightedTaskLosses:

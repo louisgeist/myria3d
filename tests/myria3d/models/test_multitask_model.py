@@ -204,3 +204,65 @@ def test_reduce_lr_on_plateau_raises_when_frequency_not_aligned():
     trainer = _make_plateau_trainer(max_epochs=1, check_val_every_n_epoch=5)
     with pytest.raises(MisconfigurationException, match="val/iou"):
         trainer.fit(model, train_dataloaders=_make_dataloader(_make_batches(1)))
+
+
+def test_pixel_semantic_and_tile_distribution_training_step_smoke():
+    from myria3d.models.losses import WeightedKLDivLoss
+
+    task_configs = {
+        "segment": {"task_type": "semantic", "num_classes": 4, "ignore_index": 3},
+        "forest_2d": {
+            "task_type": "pixel_semantic",
+            "num_classes": 2,
+            "ignore_index": 2,
+            "pooling": "mean",
+        },
+        "roads": {
+            "task_type": "pixel_semantic",
+            "num_classes": 2,
+            "ignore_index": 2,
+            "pooling": "max",
+        },
+        "nathab_habitat_type": {
+            "task_type": "tile_distribution",
+            "num_classes": 4,
+            "ignore_index": 4,
+        },
+        "elevation": {"task_type": "regression"},
+    }
+    model = _make_model(
+        neural_net_hparams=dict(
+            num_features=NUM_FEATURES,
+            task_configs=task_configs,
+            num_neighbors=4,
+            decimation=4,
+            return_logits=True,
+        ),
+        task_configs=task_configs,
+        task_weights={name: 1.0 for name in task_configs},
+        criteria={
+            "segment": torch.nn.CrossEntropyLoss(ignore_index=3),
+            "forest_2d": torch.nn.CrossEntropyLoss(ignore_index=2),
+            "roads": torch.nn.CrossEntropyLoss(ignore_index=2),
+            "nathab_habitat_type": WeightedKLDivLoss(),
+            "elevation": torch.nn.SmoothL1Loss(beta=0.01),
+        },
+    )
+    model.train()
+    n = 64
+    data = Data(
+        x=torch.rand(n, NUM_FEATURES),
+        pos=torch.rand(n, 3),
+        y=torch.randint(0, 4, (n,)),
+        y_forest_2d=torch.randint(0, 3, (n,)),
+        forest_2d_cell_id=torch.arange(n) % 8,
+        y_roads=torch.randint(0, 3, (n,)),
+        roads_cell_id=torch.arange(n) % 8,
+        y_nathab_habitat_type=torch.randint(0, 5, (n,)),
+        y_elevation=torch.rand(n) * 10.0,
+    )
+    batch = Batch.from_data_list([data, data.clone()])
+    out = model.training_step(batch, 0)
+    assert torch.isfinite(out["loss"])
+    assert set(out["outputs"]) == set(task_configs)
+
