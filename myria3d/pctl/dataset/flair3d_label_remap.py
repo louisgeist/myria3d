@@ -1,8 +1,9 @@
 """
 Flair3D+ unified label definitions and LUT remapping. (LUT: look-up table)
 
-Single registry for all semantic tasks (segment, forest, land_use, natural_habitat).
-Used by preprocess_flair3d_v2 and flair3d_config_utils (training metadata).
+Registry for `segment` (per-point semantic classes) and `natural_habitat` (raw CarHab
+ids, remapped into 4 low-cardinality ecological axes consumed as tile_distribution
+targets — see myria3d/pctl/dataset/pointcept_npy.py).
 
 Source-agnostic: remapping applies the same whether labels come from a PLY field
 or a sampled GeoTIFF raster.
@@ -14,13 +15,6 @@ from dataclasses import dataclass
 from typing import Dict, Mapping, Sequence, Tuple
 
 import numpy as np
-
-SEMANTIC_TASK_KEYS: Tuple[str, ...] = (
-    "segment",
-    "forest",
-    "land_use",
-    "natural_habitat",
-)
 
 # ---------------------------------------------------------------------------
 # Class names (default / fine-grained taxonomies)
@@ -51,182 +45,39 @@ _SEGMENT_NAMES: Tuple[str, ...] = (
 _SEGMENT_VOID_TRAIN_ID = 15
 _SEGMENT_MISSING_FILL_RAW_ID = 255
 
-_FOREST_NAMES: Tuple[str, ...] = ("Not Forest", "Forest", "Void")
+# Raw CarHab natural_habitat ids (0-43) are structured as: ids 0-35 = 6 domain/type
+# blocks (open-temperate, forest-temperate, open-mediterranean, forest-mediterranean,
+# open-alpine, forest-alpine) of 6 ids each (acid+humid, acid+mesic, acid+dry,
+# alkaline+humid, alkaline+mesic, alkaline+dry); ids 36-39 = mineral/aquatic (acid,
+# alkaline each); id 40 = cultivated; id 41 = built/artificial; id 42 = N/A; id 43 =
+# roads & paved tracks. Ids 42 and 43 are void in every axis below.
 
-_LAND_USE_NAMES: Tuple[str, ...] = (
-    "Agriculture",
-    "Sylviculture",
-    "Activites extraction",
-    "Peche et aquaculture",
-    "Autres productions primaires",
-    "Production secondaire",
-    "Production secondaire tertiaire residentiel",
-    "Production tertiaire",
-    "Reseaux routiers",
-    "Reseaux ferres",
-    "Reseaux aeriens",
-    "Reseaux fluvial maritime",
-    "Autres reseaux transport",
-    "Services logistiques stockage",
-    "Reseaux utilite publique",
-    "Usage residentiel",
-    "Zones en transition",
-    "Zones abandonnees",
-    "Sans usage",
-    "Usage inconnu",
-)
-
-_NATURAL_HABITAT_NAMES: Tuple[str, ...] = (
-    "Habitat ouvert sur substrat acide et humide du domaine tempéré",
-    "Habitat ouvert sur substrat acide et mésique du domaine tempéré",
-    "Habitat ouvert sur substrat acide et sec du domaine tempéré",
-    "Habitat ouvert sur substrat basique et humide du domaine tempéré",
-    "Habitat ouvert sur substrat basique et mésique du domaine tempéré",
-    "Habitat ouvert sur substrat basique et sec du domaine tempéré",
-    "Habitat forestier sur substrat acide et humide du domaine tempéré",
-    "Habitat forestier sur substrat acide et mésique du domaine tempéré",
-    "Habitat forestier sur substrat acide et sec du domaine tempéré",
-    "Habitat forestier sur substrat basique et humide du domaine tempéré",
-    "Habitat forestier sur substrat basique et mésique du domaine tempéré",
-    "Habitat forestier sur substrat basique et sec du domaine tempéré",
-    "Habitat ouvert sur substrat acide et humide du domaine méditerranéen",
-    "Habitat ouvert sur substrat acide et mésique du domaine méditerranéen",
-    "Habitat ouvert sur substrat acide et sec du domaine méditerranéen",
-    "Habitat ouvert sur substrat basique et humide du domaine méditerranéen",
-    "Habitat ouvert sur substrat basique et mésique du domaine méditerranéen",
-    "Habitat ouvert sur substrat basique et sec du domaine méditerranéen",
-    "Habitat forestier sur substrat acide et humide du domaine méditerranéen",
-    "Habitat forestier sur substrat acide et mésique du domaine méditerranéen",
-    "Habitat forestier sur substrat acide et sec du domaine méditerranéen",
-    "Habitat forestier sur substrat basique et humide du domaine méditerranéen",
-    "Habitat forestier sur substrat basique et mésique du domaine méditerranéen",
-    "Habitat forestier sur substrat basique et sec du domaine méditerranéen",
-    "Habitat ouvert sur substrat acide et humide du domaine alpin",
-    "Habitat ouvert sur substrat acide et mésique du domaine alpin",
-    "Habitat ouvert sur substrat acide et sec du domaine alpin",
-    "Habitat ouvert sur substrat basique et humide du domaine alpin",
-    "Habitat ouvert sur substrat basique et mésique du domaine alpin",
-    "Habitat ouvert sur substrat basique et sec du domaine alpin",
-    "Habitat forestier sur substrat acide et humide du domaine alpin",
-    "Habitat forestier sur substrat acide et mésique du domaine alpin",
-    "Habitat forestier sur substrat acide et sec du domaine alpin",
-    "Habitat forestier sur substrat basique et humide du domaine alpin",
-    "Habitat forestier sur substrat basique et mésique du domaine alpin",
-    "Habitat forestier sur substrat basique et sec du domaine alpin",
-    "Habitat minéral sur substrat acide",
-    "Habitat minéral sur substrat basique",
-    "Habitat aquatique sur substrat acide",
-    "Habitat aquatique sur substrat basique",
-    "Habitat cultivé",
-    "Zone bâtie et autre habitat artificiel",
-    "Routes & voies verrées",
-    "Void",
-)
-
-_LAND_USE_COARSE_NAMES: Tuple[str, ...] = (
-    "Production primaire",
-    "Production secondaire et tertiaire",
-    "Reseaux de transport",
-    "Services et utilite publique",
-    "Usage residentiel",
-    "Zones en transition ou abandonnees",
-    "Sans usage",
-    "Usage inconnu",
-)
-
-# Raw ids 0-19 match land_use_classes.txt keys 1-20 (0-indexed).
-# filtered: missing / mixed classes -> void (train id 10).
-_LAND_USE_FILTERED_NAMES: Tuple[str, ...] = (
-    "Agriculture",
-    "Sylviculture",
-    "Extraction activities",
-    "Secondary production",
-    "Tertiary production",
-    "Road networks",
-    "Rail networks",
-    "Air networks",
-    "Residential use",
-    "No land use",
-    "Void",
-)
-
-_LAND_USE_FILTERED_LUT = np.array(
-    [
-        0,   # 0  Agriculture
-        1,   # 1  Sylviculture
-        2,   # 2  Extraction activities
-        10,  # 3  Fishing and aquaculture -> void
-        10,  # 4  Other primary production -> void
-        3,   # 5  Secondary production
-        10,  # 6  Secondary, tertiary and residential (mixed) -> void
-        4,   # 7  Tertiary production
-        5,   # 8  Road networks
-        6,   # 9  Rail networks
-        7,   # 10 Air networks
-        10,  # 11 Inland and maritime transport networks -> void
-        10,  # 12 Other transport networks -> void
-        10,  # 13 Logistics and storage services -> void
-        10,  # 14 Utility networks -> void
-        8,   # 15 Residential use
-        10,  # 16 Transition zones -> void
-        10,  # 17 Abandoned zones -> void
-        9,   # 18 No land use
-        10,  # 19 Unknown use -> void
-    ],
-    dtype=np.int32,
-)
-
-_NATURAL_HABITAT_BY_DOMAIN_NAMES: Tuple[str, ...] = (
-    "Domaine tempéré",
-    "Domaine méditerranéen",
-    "Domaine alpin",
-    "Habitat minéral",
-    "Habitat aquatique",
-    "Habitat cultivé",
-    "Zone bâtie et autre habitat artificiel",
-    "Routes & voies verrées",
-    "Void",
-)
-
-_NATURAL_HABITAT_BY_HABITAT_TYPE_NAMES: Tuple[str, ...] = (
-    "Habitat ouvert",
-    "Habitat forestier",
-    "Habitat minéral",
-    "Habitat aquatique",
-    "Habitat cultivé",
-    "Zone bâtie et autre habitat artificiel",
-    "Routes & voies verrées",
-    "Void",
-)
-
-_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_NAMES: Tuple[str, ...] = (
-    "Open habitat in temperate domain",
-    "Forest habitat in temperate domain",
-    "Open habitat in mediterranean domain",
-    "Forest habitat in mediterranean domain",
-    "Open habitat in alpine domain",
-    "Forest habitat in alpine domain",
+_NATURAL_HABITAT_BY_HABITAT_TYPE_ECOLOGICAL_NAMES: Tuple[str, ...] = (
+    "Open habitat",
+    "Forest habitat",
     "Mineral habitat",
     "Aquatic habitat",
-    "Cultivated habitat",
-    "Built and other artificial habitat",
-    "Roads & paved tracks",
     "Void",
 )
 
-# CarHab raw id -> train id. Raw 42=N/A -> void (11); raw 43=routes -> 10.
-_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT = np.array(
-    [
-        0, 0, 0, 0, 0, 0,  # 0-5   open / temperate
-        1, 1, 1, 1, 1, 1,  # 6-11  forest / temperate
-        2, 2, 2, 2, 2, 2,  # 12-17 open / mediterranean
-        3, 3, 3, 3, 3, 3,  # 18-23 forest / mediterranean
-        4, 4, 4, 4, 4, 4,  # 24-29 open / alpine
-        5, 5, 5, 5, 5, 5,  # 30-35 forest / alpine
-        6, 6, 7, 7, 8, 9,  # 36-41 mineral, aquatic, cultivated, built
-        11, 10,  # 42=N/A -> void, 43=routes
-    ],
-    dtype=np.int32,
+_NATURAL_HABITAT_BY_MOISTURE_REGIME_NAMES: Tuple[str, ...] = (
+    "Humid",
+    "Mesic",
+    "Dry",
+    "Void",
+)
+
+_NATURAL_HABITAT_BY_SOIL_CHEMISTRY_NAMES: Tuple[str, ...] = (
+    "Acidic",
+    "Alkaline",
+    "Void",
+)
+
+_NATURAL_HABITAT_BY_CLIMATIC_DOMAIN_NAMES: Tuple[str, ...] = (
+    "Temperate domain",
+    "Mediterranean domain",
+    "Alpine domain",
+    "Void",
 )
 
 
@@ -258,17 +109,9 @@ class PreprocessLabelDefinitions:
   """Bundle of label definitions passed to preprocessing workers."""
 
   segment: LabelDefinition
-  forest: LabelDefinition
-  land_use: LabelDefinition
-  natural_habitat: LabelDefinition
 
   def to_meta_dict(self) -> Dict[str, str]:
-    return {
-      "segment": self.segment.name,
-      "forest": self.forest.name,
-      "land_use": self.land_use.name,
-      "natural_habitat": self.natural_habitat.name,
-    }
+    return {"segment": self.segment.name}
 
 
 def build_lut_from_groups(
@@ -295,14 +138,6 @@ def _build_segment_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarra
   lut[:void_train_id] = np.arange(void_train_id, dtype=np.int32)
   lut[15] = 0
   lut[16] = 0
-  return lut
-
-
-def _build_natural_habitat_default_lut() -> np.ndarray:
-  """CarHab raw 42=N/A -> train void (43); raw 43=Autre/routes -> train 42."""
-  lut = np.arange(44, dtype=np.int32)
-  lut[42] = 43
-  lut[43] = 42
   return lut
 
 
@@ -355,152 +190,88 @@ def _register_segment_definitions() -> Dict[str, LabelDefinition]:
   return {"default": base, "inter_finerall10": inter_finerall10}
 
 
-def _register_forest_definitions() -> Dict[str, LabelDefinition]:
-  lut = np.arange(3, dtype=np.int32)
-  return {
-    "default": _make_definition(
-      "forest",
-      "default",
-      num_raw_classes=3,
-      lut=lut,
-      names=_FOREST_NAMES,
-      ignore_index=2,
-      missing_fill_raw_id=2,
-      source_field="FOREST",
-    ),
-  }
-
-
-def _register_land_use_definitions() -> Dict[str, LabelDefinition]:
-  identity = np.arange(20, dtype=np.int32)
-  coarse_lut = build_lut_from_groups(
-    20,
-    {
-      0: [0, 1, 2, 3, 4],
-      1: [5, 6, 7],
-      2: [8, 9, 10, 11, 12],
-      3: [13, 14],
-      4: [15],
-      5: [16, 17],
-      6: [18],
-      7: [19],
-    },
-    default_train_id=7,
-  )
-  return {
-    "default": _make_definition(
-      "land_use",
-      "default",
-      num_raw_classes=20,
-      lut=identity,
-      names=_LAND_USE_NAMES,
-      ignore_index=-1,
-      missing_fill_raw_id=19,
-      source_field="LAND_USE",
-    ),
-    "coarse": _make_definition(
-      "land_use",
-      "coarse",
-      num_raw_classes=20,
-      lut=coarse_lut,
-      names=_LAND_USE_COARSE_NAMES,
-      ignore_index=-1,
-      missing_fill_raw_id=19,
-      source_field="LAND_USE",
-    ),
-    "filtered": _make_definition(
-      "land_use",
-      "filtered",
-      num_raw_classes=20,
-      lut=_LAND_USE_FILTERED_LUT,
-      names=_LAND_USE_FILTERED_NAMES,
-      ignore_index=10,
-      missing_fill_raw_id=19,
-      source_field="LAND_USE",
-    ),
-  }
-
-
 def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
-  default_lut = _build_natural_habitat_default_lut()
-  by_domain_lut = build_lut_from_groups(
+  """4 low-cardinality ecological axes derived from raw (44-class) CarHab ids.
+
+  Raw id layout: see module-level comment above the axis name tuples. Ids 42 (N/A) and
+  43 (roads) fall outside every axis's groups and land on that axis's `default_train_id`
+  (void) automatically.
+  """
+  open_ids = list(range(0, 6)) + list(range(12, 18)) + list(range(24, 30))
+  forest_ids = list(range(6, 12)) + list(range(18, 24)) + list(range(30, 36))
+
+  habitat_type_lut = build_lut_from_groups(
     44,
-    {
-      0: list(range(0, 12)),
-      1: list(range(12, 24)),
-      2: list(range(24, 36)),
-      3: [36, 37],
-      4: [38, 39],
-      5: [40],
-      6: [41],
-      7: [43],  # raw Autre / routes
-      8: [42],  # raw N/A -> void
-    },
-    default_train_id=8,
+    {0: open_ids, 1: forest_ids, 2: [36, 37], 3: [38, 39]},
+    default_train_id=4,
   )
-  open_ids = (
-    list(range(0, 6))
-    + list(range(12, 18))
-    + list(range(24, 30))
-  )
-  forest_ids = (
-    list(range(6, 12))
-    + list(range(18, 24))
-    + list(range(30, 36))
-  )
-  by_habitat_type_lut = build_lut_from_groups(
+
+  humid_ids = [block + offset for block in range(0, 36, 6) for offset in (0, 3)]
+  mesic_ids = [block + offset for block in range(0, 36, 6) for offset in (1, 4)]
+  dry_ids = [block + offset for block in range(0, 36, 6) for offset in (2, 5)]
+  moisture_regime_lut = build_lut_from_groups(
     44,
-    {
-      0: open_ids,
-      1: forest_ids,
-      2: [36, 37],
-      3: [38, 39],
-      4: [40],
-      5: [41],
-      6: [43],
-      7: [42],
-    },
-    default_train_id=7,
+    {0: humid_ids, 1: mesic_ids, 2: dry_ids},
+    default_train_id=3,
   )
+
+  acidic_ids = [block + offset for block in range(0, 36, 6) for offset in (0, 1, 2)] + [36, 38]
+  alkaline_ids = [block + offset for block in range(0, 36, 6) for offset in (3, 4, 5)] + [37, 39]
+  soil_chemistry_lut = build_lut_from_groups(
+    44,
+    {0: acidic_ids, 1: alkaline_ids},
+    default_train_id=2,
+  )
+
+  climatic_domain_lut = build_lut_from_groups(
+    44,
+    {0: list(range(0, 12)), 1: list(range(12, 24)), 2: list(range(24, 36))},
+    default_train_id=3,
+  )
+
+  # Missing-file fallback: raw id 43 (roads) is void in every axis above, matching
+  # Pointcept's own missing-target sentinel for this field.
+  missing_fill_raw_id = 43
+
   return {
-    "default": _make_definition(
+    "by_habitat_type_ecological": _make_definition(
       "natural_habitat",
-      "default",
+      "by_habitat_type_ecological",
       num_raw_classes=44,
-      lut=default_lut,
-      names=_NATURAL_HABITAT_NAMES,
-      ignore_index=43,
-      missing_fill_raw_id=42,
+      lut=habitat_type_lut,
+      names=_NATURAL_HABITAT_BY_HABITAT_TYPE_ECOLOGICAL_NAMES,
+      ignore_index=4,
+      missing_fill_raw_id=missing_fill_raw_id,
       source_field="NATURAL_HABITAT",
     ),
-    "by_domain": _make_definition(
+    "by_moisture_regime": _make_definition(
       "natural_habitat",
-      "by_domain",
+      "by_moisture_regime",
       num_raw_classes=44,
-      lut=by_domain_lut,
-      names=_NATURAL_HABITAT_BY_DOMAIN_NAMES,
-      ignore_index=8,
-      missing_fill_raw_id=42,
+      lut=moisture_regime_lut,
+      names=_NATURAL_HABITAT_BY_MOISTURE_REGIME_NAMES,
+      ignore_index=3,
+      missing_fill_raw_id=missing_fill_raw_id,
       source_field="NATURAL_HABITAT",
     ),
-    "by_habitat_type": _make_definition(
+    "by_soil_chemistry": _make_definition(
       "natural_habitat",
-      "by_habitat_type",
+      "by_soil_chemistry",
       num_raw_classes=44,
-      lut=by_habitat_type_lut,
-      names=_NATURAL_HABITAT_BY_HABITAT_TYPE_NAMES,
-      ignore_index=7,
-      missing_fill_raw_id=42,
+      lut=soil_chemistry_lut,
+      names=_NATURAL_HABITAT_BY_SOIL_CHEMISTRY_NAMES,
+      ignore_index=2,
+      missing_fill_raw_id=missing_fill_raw_id,
       source_field="NATURAL_HABITAT",
     ),
-    "by_habitat_x_domain": _make_definition(
+    "by_climatic_domain": _make_definition(
       "natural_habitat",
-      "by_habitat_x_domain",
+      "by_climatic_domain",
       num_raw_classes=44,
-      lut=_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_LUT,
-      names=_NATURAL_HABITAT_BY_HABITAT_X_DOMAIN_NAMES,
-      ignore_index=11,
-      missing_fill_raw_id=42,
+      lut=climatic_domain_lut,
+      names=_NATURAL_HABITAT_BY_CLIMATIC_DOMAIN_NAMES,
+      ignore_index=3,
+      missing_fill_raw_id=missing_fill_raw_id,
       source_field="NATURAL_HABITAT",
     ),
   }
@@ -508,17 +279,22 @@ def _register_natural_habitat_definitions() -> Dict[str, LabelDefinition]:
 
 LABEL_DEFINITIONS: Dict[str, Dict[str, LabelDefinition]] = {
   "segment": _register_segment_definitions(),
-  "forest": _register_forest_definitions(),
-  "land_use": _register_land_use_definitions(),
   "natural_habitat": _register_natural_habitat_definitions(),
 }
 
 # Default definition per task (preprocess v2 CLI + training when not overridden).
 DEFAULT_LABEL_DEFINITION_NAMES: Dict[str, str] = {
   "segment": "default",
-  "forest": "default",
-  "land_use": "filtered",
-  "natural_habitat": "by_habitat_x_domain",
+}
+
+# The 4 natural_habitat axis definitions applied together to derive myria3d's
+# tile_distribution tasks (nathab_habitat_type, nathab_moisture_regime,
+# nathab_soil_chemistry, nathab_bioclimatic_zone) — see pointcept_npy.py.
+NATURAL_HABITAT_AXIS_DEFINITIONS: Dict[str, str] = {
+  "nathab_habitat_type": "by_habitat_type_ecological",
+  "nathab_moisture_regime": "by_moisture_regime",
+  "nathab_soil_chemistry": "by_soil_chemistry",
+  "nathab_bioclimatic_zone": "by_climatic_domain",
 }
 
 
@@ -551,16 +327,8 @@ def get_definition(task_key: str, name: str) -> LabelDefinition:
 
 def build_preprocess_label_definitions(
     segment: str = DEFAULT_LABEL_DEFINITION_NAMES["segment"],
-    forest: str = DEFAULT_LABEL_DEFINITION_NAMES["forest"],
-    land_use: str = DEFAULT_LABEL_DEFINITION_NAMES["land_use"],
-    natural_habitat: str = DEFAULT_LABEL_DEFINITION_NAMES["natural_habitat"],
 ) -> PreprocessLabelDefinitions:
-  return PreprocessLabelDefinitions(
-    segment=get_definition("segment", segment),
-    forest=get_definition("forest", forest),
-    land_use=get_definition("land_use", land_use),
-    natural_habitat=get_definition("natural_habitat", natural_habitat),
-  )
+  return PreprocessLabelDefinitions(segment=get_definition("segment", segment))
 
 
 def apply_remap(values: np.ndarray, definition: LabelDefinition) -> np.ndarray:
@@ -575,36 +343,3 @@ def apply_remap(values: np.ndarray, definition: LabelDefinition) -> np.ndarray:
   return result
 
 
-def definition_to_task_config(definition: LabelDefinition) -> Dict[str, object]:
-  """Convert a LabelDefinition to a Flair3D semantic task config dict."""
-  if definition.ignore_index >= 0:
-    num_classes = definition.ignore_index
-  else:
-    num_classes = len(definition.names)
-  return {
-    "num_classes": num_classes,
-    "ignore_index": definition.ignore_index,
-    "names": list(definition.names),
-    "num_raw_classes": definition.num_raw_classes,
-    "definition": definition.name,
-    "task_type": "semantic",
-  }
-
-
-def default_task_config(task_key: str) -> Dict[str, object]:
-  """Task config for the default definition of a semantic task."""
-  return definition_to_task_config(get_definition(task_key, "default"))
-
-
-def build_flair3d_plus_multitask_task_configs() -> Dict[str, Dict[str, object]]:
-  """Task configs for Flair3D+ multitask training (aligned with Pointcept remaps)."""
-  configs: Dict[str, Dict[str, object]] = {}
-  for task_key in SEMANTIC_TASK_KEYS:
-    defn_name = DEFAULT_LABEL_DEFINITION_NAMES[task_key]
-    cfg = definition_to_task_config(get_definition(task_key, defn_name))
-    if task_key == "segment":
-      # myria3d convention: 16 logits with void at ignore_index 15
-      cfg["num_classes"] = 16
-    configs[task_key] = cfg
-  configs["elevation"] = {"task_type": "regression"}
-  return configs

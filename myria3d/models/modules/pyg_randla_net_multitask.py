@@ -15,7 +15,10 @@ from myria3d.models.modules.pyg_randla_net import (
 class PyGRandLANetMultiTask(torch.nn.Module):
     """RandLA-Net with shared backbone and per-task segmentation / regression heads."""
 
-    _TASK_TYPES = frozenset(("semantic", "regression"))
+    _TASK_TYPES = frozenset(("semantic", "regression", "pixel_semantic", "tile_distribution"))
+    # Task types whose head predicts a class distribution (same Linear(32, num_classes)
+    # head as "semantic"); only the pooling/loss applied downstream differs.
+    _CLASSIFICATION_LIKE_TYPES = frozenset(("semantic", "pixel_semantic", "tile_distribution"))
 
     def __init__(
         self,
@@ -34,7 +37,7 @@ class PyGRandLANetMultiTask(torch.nn.Module):
         semantic_num_classes = [
             int(cfg["num_classes"])
             for cfg in self.task_configs.values()
-            if cfg.get("task_type", "semantic") == "semantic"
+            if cfg.get("task_type", "semantic") in self._CLASSIFICATION_LIKE_TYPES
         ]
         max_num_classes = max(semantic_num_classes) if semantic_num_classes else 1
         d_bottleneck = max(32, max_num_classes, num_features)
@@ -55,7 +58,7 @@ class PyGRandLANetMultiTask(torch.nn.Module):
         for task_name, task_config in self.task_configs.items():
             task_type = self._task_type(task_config)
             self.mlp_heads[task_name] = SharedMLP([d_bottleneck, 64, 32], dropout=[0.0, 0.5])
-            if task_type == "semantic":
+            if task_type in self._CLASSIFICATION_LIKE_TYPES:
                 self.fc_heads[task_name] = Linear(32, int(task_config["num_classes"]))
             else:
                 self.fc_heads[task_name] = Linear(32, 1)
@@ -65,8 +68,8 @@ class PyGRandLANetMultiTask(torch.nn.Module):
         task_type = task_config.get("task_type", "semantic")
         if task_type not in cls._TASK_TYPES:
             raise ValueError(
-                "Each task_configs entry must set task_type to 'semantic' or 'regression' "
-                f"(got {task_type!r})."
+                "Each task_configs entry must set task_type to one of "
+                f"{sorted(cls._TASK_TYPES)} (got {task_type!r})."
             )
         return task_type
 

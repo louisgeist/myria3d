@@ -285,9 +285,6 @@ def create_hdf5(
                         "y",
                         "y_cosia",
                         "y_lidarhd",
-                        "y_forest",
-                        "y_land_use",
-                        "y_natural_habitat",
                     ]:
                         if getattr(data, y_name, None) is not None:
                             hdf5_file.create_dataset(
