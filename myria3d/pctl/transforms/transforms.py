@@ -1,7 +1,7 @@
 import math
 import random
 import re
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 import numpy as np
 import torch
@@ -14,6 +14,24 @@ from myria3d.utils import utils
 log = utils.get_logger(__name__)
 
 COMMON_CODE_FOR_ALL_ARTEFACTS = 65
+
+# Feature groups dropped by RandomDropColor / RandomDropStrength (Pointcept names).
+# Layout matches Flair3D+ `x`: Intensity, Red, Green, Blue, rgb_avg.
+COLOR_FEATURE_NAMES = ("Red", "Green", "Blue", "rgb_avg")
+STRENGTH_FEATURE_NAMES = ("Intensity",)
+
+
+def resolve_x_feature_names(data: Data) -> List[str]:
+    """Return per-point feature names, even when PyG collate nests them per graph."""
+    names = getattr(data, "x_features_names", None)
+    if not names:
+        return []
+    first = names[0]
+    if isinstance(first, (list, tuple)):
+        return list(first)
+    if isinstance(first, str):
+        return list(names)
+    return []
 
 
 class ToTensor(BaseTransform):
@@ -162,13 +180,16 @@ class CopyFullPos:
 
 
 class CopyFullPreparedTargets:
-    """Make a copy of all prepared targets - to be used for test."""
+    """Make a copy of all prepared targets - to be used for test.
+
+    Only tasks that get KNN-interpolated to the full point cloud need a copy here.
+    pixel_semantic (forest_2d, roads) and tile_distribution (nathab_*) tasks are always
+    evaluated at the model's native resolution — see MultiTaskModel — so they are
+    deliberately absent from this list.
+    """
 
     MULTITASK_TARGET_KEYS = (
         "y",
-        "y_forest",
-        "y_land_use",
-        "y_natural_habitat",
         "y_elevation",
     )
 
@@ -178,8 +199,6 @@ class CopyFullPreparedTargets:
         for key in self.MULTITASK_TARGET_KEYS:
             if hasattr(data, key) and getattr(data, key) is not None:
                 data.copies[f"transformed_{key}_copy"] = getattr(data, key).clone()
-        if hasattr(data, "y") and data.y is not None:
-            data.copies["transformed_y_copy"] = data.y.clone()
         return data
 
 
@@ -257,6 +276,105 @@ class ZRandomOffset(BaseTransform):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(std={self.std})"
+
+
+class RandomDropFeatureGroup(BaseTransform):
+    """Zero a group of per-point features on a random subset of points.
+
+    Port of Pointcept ``RandomDropColor`` / ``RandomDropStrength``. When
+    ``keep_mask`` is set, a boolean mask (True = dropped) is stored so the model
+    can replace zeros with a learned fill-in value. Stacked calls OR into the
+    existing mask. Train-only: put this in augmentations (after
+    ``StandardizeRGBAndIntensity``).
+    """
+
+    def __init__(
+        self,
+        feature_names: Sequence[str],
+        mask_key: str,
+        drop_ratio: float = 0.2,
+        drop_application_ratio: float = 0.5,
+        keep_mask: bool = False,
+        drop_value: float = 0.0,
+    ):
+        self.feature_names = tuple(feature_names)
+        self.mask_key = mask_key
+        self.drop_ratio = drop_ratio
+        self.drop_application_ratio = drop_application_ratio
+        self.keep_mask = keep_mask
+        self.drop_value = drop_value
+
+    def __call__(self, data: Data) -> Data:
+        names = resolve_x_feature_names(data)
+        indices = [names.index(name) for name in self.feature_names if name in names]
+        if not indices or data.x is None or data.x.size(0) == 0:
+            return data
+
+        n = data.x.size(0)
+        existing = getattr(data, self.mask_key, None) if self.keep_mask else None
+        if existing is not None:
+            drop_mask = existing.bool().reshape(-1).clone()
+        else:
+            drop_mask = torch.zeros(n, dtype=torch.bool, device=data.x.device)
+
+        if random.random() < self.drop_application_ratio:
+            num_to_drop = int(n * self.drop_ratio)
+            if num_to_drop > 0:
+                idx = torch.randperm(n, device=data.x.device)[:num_to_drop]
+                drop_mask[idx] = True
+                for col in indices:
+                    data.x[idx, col] = self.drop_value
+
+        if self.keep_mask:
+            data[self.mask_key] = drop_mask
+        return data
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(drop_ratio={self.drop_ratio}, "
+            f"drop_application_ratio={self.drop_application_ratio}, "
+            f"keep_mask={self.keep_mask})"
+        )
+
+
+class RandomDropColor(RandomDropFeatureGroup):
+    """Drop RGB (+ ``rgb_avg``) features; see Pointcept ``RandomDropColor``."""
+
+    def __init__(
+        self,
+        drop_ratio: float = 0.2,
+        drop_application_ratio: float = 0.5,
+        keep_mask: bool = False,
+        drop_value: float = 0.0,
+    ):
+        super().__init__(
+            COLOR_FEATURE_NAMES,
+            "color_mask",
+            drop_ratio=drop_ratio,
+            drop_application_ratio=drop_application_ratio,
+            keep_mask=keep_mask,
+            drop_value=drop_value,
+        )
+
+
+class RandomDropStrength(RandomDropFeatureGroup):
+    """Drop LiDAR intensity; see Pointcept ``RandomDropStrength``."""
+
+    def __init__(
+        self,
+        drop_ratio: float = 0.2,
+        drop_application_ratio: float = 0.5,
+        keep_mask: bool = False,
+        drop_value: float = 0.0,
+    ):
+        super().__init__(
+            STRENGTH_FEATURE_NAMES,
+            "strength_mask",
+            drop_ratio=drop_ratio,
+            drop_application_ratio=drop_application_ratio,
+            keep_mask=keep_mask,
+            drop_value=drop_value,
+        )
 
 
 class TargetTransform(BaseTransform):

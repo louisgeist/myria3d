@@ -16,23 +16,31 @@ from myria3d.models.gradnorm_lite import (
     compute_task_last_layer_grad_norms,
     resolve_grad_norm_lite_scales,
 )
+from myria3d.models.losses import pool_axis_distribution_from_probs
 from myria3d.models.model import MODEL_ZOO, get_neural_net_class
+from myria3d.models.modules.pixel_pooling import pool_points_by_cell
 from myria3d.models.modules.pyg_randla_net_multitask import PyGRandLANetMultiTask
+from myria3d.pctl.transforms.transforms import (
+    COLOR_FEATURE_NAMES,
+    STRENGTH_FEATURE_NAMES,
+    resolve_x_feature_names,
+)
 from myria3d.utils import utils
 
 log = utils.get_logger(__name__)
 
 MODEL_ZOO.append(PyGRandLANetMultiTask)
 
-SEMANTIC_BATCH_TARGETS = {
-    "segment": "y",
-    "forest": "y_forest",
-    "land_use": "y_land_use",
-    "natural_habitat": "y_natural_habitat",
-}
-REGRESSION_BATCH_TARGETS = {
-    "elevation": "y_elevation",
-}
+# Tasks whose loss/metrics are computed by pooling raw (subsampled) per-point predictions
+# to a coarser group — a raster cell for "pixel_semantic", a whole tile for
+# "tile_distribution" — rather than by KNN-interpolating to the full point cloud.
+POOLED_TASK_TYPES = ("pixel_semantic", "tile_distribution")
+
+
+def _batch_target_key(task_name: str) -> str:
+    """Attribute name on `Data`/`Batch` holding a task's raw target: "y" for the main
+    (segment) task, "y_{task_name}" for every other task."""
+    return "y" if task_name == "segment" else f"y_{task_name}"
 
 
 def _compute_shared_knn_interpolation_weights(
@@ -87,6 +95,18 @@ class MultiTaskModel(LightningModule):
         self.main_task = kwargs.get("main_task", "segment")
         self.elevation_target_scale = float(kwargs.get("elevation_target_scale", 0.01))
 
+        # Pooled tasks (pixel_semantic, tile_distribution) are always evaluated at the
+        # model's native (subsampled) resolution — never KNN-interpolated to the full
+        # point cloud, since their targets are inherently coarser than one label per point.
+        self._pooled_tasks = tuple(
+            name
+            for name, cfg in self.task_configs.items()
+            if cfg.get("task_type", "semantic") in POOLED_TASK_TYPES
+        )
+        self._interpolated_tasks = tuple(
+            name for name in self.task_configs if name not in self._pooled_tasks
+        )
+
         self.grad_norm_lite_enabled = bool(kwargs.get("grad_norm_lite", False))
         self.grad_norm_lite_interval = int(kwargs.get("grad_norm_lite_interval", 100))
         self.grad_norm_lite_task_groups = dict(kwargs.get("grad_norm_lite_task_groups", {}) or {})
@@ -96,6 +116,11 @@ class MultiTaskModel(LightningModule):
                 eps=float(kwargs.get("grad_norm_lite_eps", 1e-3)),
             )
         self.log_task_gradient_norms_enabled = bool(kwargs.get("log_task_gradient_norms", False))
+
+        self._init_learned_masked_feat(
+            enable=bool(kwargs.get("learned_masked_feat", False)),
+            keys=kwargs.get("learned_masked_feat_keys", ("color", "strength")),
+        )
 
         criteria_cfg = kwargs.get("criteria", {})
         self.criteria = nn.ModuleDict()
@@ -108,32 +133,92 @@ class MultiTaskModel(LightningModule):
             else:
                 self.criteria[task_name] = criterion_spec
 
+    def _init_learned_masked_feat(self, enable: bool, keys) -> None:
+        """Learned RGB / intensity fill-in for points dropped at train time (Pointcept)."""
+        self.learned_masked_feat = enable
+        self.learned_masked_feat_keys = tuple(keys or ())
+        if not self.learned_masked_feat:
+            return
+        if "color" in self.learned_masked_feat_keys:
+            self.color_mask_value = nn.Parameter(torch.zeros(1, len(COLOR_FEATURE_NAMES)))
+        if "strength" in self.learned_masked_feat_keys:
+            self.strength_mask_value = nn.Parameter(
+                torch.zeros(1, len(STRENGTH_FEATURE_NAMES))
+            )
+
+    def _learned_mask_groups(self):
+        return (
+            ("color", COLOR_FEATURE_NAMES, "color_mask", "color_mask_value"),
+            ("strength", STRENGTH_FEATURE_NAMES, "strength_mask", "strength_mask_value"),
+        )
+
+    def _fill_masked_features(self, batch: Batch) -> torch.Tensor:
+        """Replace dropped RGB / intensity channels with learned fill-in values.
+
+        ``color_mask`` / ``strength_mask`` are True on dropped points. When no mask
+        is present (val/test), features are left unchanged. A zero dummy term keeps
+        the fill parameters in the autograd graph for DDP when a batch has no drops.
+        """
+        x = batch.x
+        if not self.learned_masked_feat:
+            return x
+
+        names = resolve_x_feature_names(batch)
+        out = x
+        for _, feat_names, mask_key, param_name in self._learned_mask_groups():
+            if not hasattr(self, param_name):
+                continue
+            mask = getattr(batch, mask_key, None)
+            if mask is None or not names:
+                continue
+            present = [name for name in feat_names if name in names]
+            if not present:
+                continue
+            param = getattr(self, param_name).to(dtype=out.dtype, device=out.device)
+            if len(names) != out.size(1):
+                continue
+            point_mask = mask.bool().reshape(-1).to(device=out.device)
+            cols = []
+            for i, name in enumerate(names):
+                col = out[:, i]
+                if name in present:
+                    fill = param[:, feat_names.index(name)].reshape(())
+                    col = torch.where(point_mask, fill, col)
+                cols.append(col)
+            out = torch.stack(cols, dim=1)
+
+        if self.training:
+            for _, _, _, param_name in self._learned_mask_groups():
+                if hasattr(self, param_name):
+                    out = out + getattr(self, param_name).sum() * 0.0
+        return out
+
+    def _log_learned_mask_values(self) -> None:
+        if not self.learned_masked_feat:
+            return
+        for group, feat_names, _, param_name in self._learned_mask_groups():
+            if not hasattr(self, param_name):
+                continue
+            values = getattr(self, param_name).detach().flatten()
+            for name, value in zip(feat_names, values):
+                self.log(
+                    f"train/learned_mask/{group}_{name}",
+                    value.item(),
+                    on_step=False,
+                    on_epoch=True,
+                )
+
     def _task_type(self, task_name: str) -> str:
         return self.task_configs[task_name].get("task_type", "semantic")
 
     def _get_batch_target(self, batch: Batch, task_name: str) -> Optional[torch.Tensor]:
-        if task_name in SEMANTIC_BATCH_TARGETS:
-            key = SEMANTIC_BATCH_TARGETS[task_name]
-            return getattr(batch, key, None)
-        if task_name in REGRESSION_BATCH_TARGETS:
-            key = REGRESSION_BATCH_TARGETS[task_name]
-            return getattr(batch, key, None)
-        return None
+        return getattr(batch, _batch_target_key(task_name), None)
 
     def _get_copy_target(self, batch: Batch, task_name: str) -> Optional[torch.Tensor]:
         if "copies" not in batch:
             return None
-        if task_name in SEMANTIC_BATCH_TARGETS:
-            key = SEMANTIC_BATCH_TARGETS[task_name]
-            copy_key = f"transformed_{key}_copy"
-            if copy_key in batch.copies:
-                return batch.copies[copy_key]
-            if key == "y":
-                return batch.copies.get("transformed_y_copy")
-        if task_name in REGRESSION_BATCH_TARGETS:
-            key = REGRESSION_BATCH_TARGETS[task_name]
-            return batch.copies.get(f"transformed_{key}_copy")
-        return None
+        copy_key = f"transformed_{_batch_target_key(task_name)}_copy"
+        return batch.copies.get(copy_key)
 
     def _interpolate_outputs(
         self, outputs: Dict[str, torch.Tensor], batch: Batch
@@ -167,34 +252,86 @@ class MultiTaskModel(LightningModule):
     def forward(
         self, batch: Batch, *, interpolate: bool = True
     ) -> Tuple[Dict[str, Optional[torch.Tensor]], Dict[str, torch.Tensor]]:
-        outputs = self.model(batch.x, batch.pos, batch.batch, batch.ptr)
+        raw_outputs = self.model(
+            self._fill_masked_features(batch), batch.pos, batch.batch, batch.ptr
+        )
 
+        # Pooled tasks (pixel_semantic, tile_distribution) always use the raw, subsampled
+        # per-point predictions — their loss/metrics pool these down to a raster cell or a
+        # whole tile (see _compute_task_loss), so KNN-interpolating them to the full point
+        # cloud first would be both wasted work and, for tile_distribution, incorrect
+        # (batch.ptr would no longer match the interpolated point count).
+        pooled_outputs = {name: raw_outputs[name] for name in self._pooled_tasks}
+        pooled_targets = {
+            name: self._get_batch_target(batch, name) for name in self._pooled_tasks
+        }
+
+        interp_input = {name: raw_outputs[name] for name in self._interpolated_tasks}
         if self.training or "copies" not in batch or not interpolate:
-            targets = {
-                task_name: self._get_batch_target(batch, task_name)
-                for task_name in self.task_configs
+            interp_outputs = interp_input
+            interp_targets = {
+                name: self._get_batch_target(batch, name) for name in self._interpolated_tasks
             }
-            return targets, outputs
+        else:
+            interp_outputs = self._interpolate_outputs(interp_input, batch)
+            # knn_interpolate runs on CPU (see model.py); copy targets must match output device.
+            output_device = (
+                next(iter(interp_outputs.values())).device if interp_outputs else batch.pos.device
+            )
+            interp_targets = {}
+            for name in self._interpolated_tasks:
+                target = self._get_copy_target(batch, name)
+                interp_targets[name] = target.to(output_device) if target is not None else None
 
-        outputs = self._interpolate_outputs(outputs, batch)
-        # knn_interpolate runs on CPU (see model.py); copy targets must match output device.
-        output_device = next(iter(outputs.values())).device
-        targets = {}
-        for task_name in self.task_configs:
-            target = self._get_copy_target(batch, task_name)
-            targets[task_name] = target.to(output_device) if target is not None else None
+        outputs = {**interp_outputs, **pooled_outputs}
+        targets = {**interp_targets, **pooled_targets}
         return targets, outputs
+
+    def _compute_pixel_semantic_loss(
+        self, task_name: str, criterion, preds: torch.Tensor, targets: torch.Tensor, batch: Batch
+    ) -> torch.Tensor:
+        cell_id = getattr(batch, f"{task_name}_cell_id").to(preds.device)
+        batch_index = batch.batch.to(preds.device)
+        pooling = self.task_configs[task_name].get("pooling", "mean")
+        pooled_preds, pooled_targets = pool_points_by_cell(
+            preds, cell_id, targets.long(), batch_index, pooling=pooling
+        )
+        if pooled_preds.size(0) == 0:
+            return preds.new_zeros(())
+        return criterion(pooled_preds, pooled_targets)
+
+    def _compute_tile_distribution_loss(
+        self, task_name: str, criterion, preds: torch.Tensor, targets: torch.Tensor, batch: Batch
+    ) -> torch.Tensor:
+        task_config = self.task_configs[task_name]
+        ignore_index = int(task_config["ignore_index"])
+        num_classes = int(task_config["num_classes"])
+        probs = torch.softmax(preds.float(), dim=-1)
+        pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
+            probs, targets.long().to(preds.device), batch.ptr.to(preds.device), ignore_index, num_classes
+        )
+        keep = n_t > 0
+        if not bool(keep.any()):
+            return preds.new_zeros(())
+        return criterion(pi_hat[keep], q_t[keep], weight=n_t[keep])
 
     def _compute_task_loss(
         self,
         task_name: str,
         preds: torch.Tensor,
         targets: torch.Tensor,
+        batch: Batch,
     ) -> torch.Tensor:
         criterion = self.criteria[task_name].to(preds.device)
-        targets = targets.to(preds.device)
+        task_type = self._task_type(task_name)
 
-        if self._task_type(task_name) == "semantic":
+        if task_type == "pixel_semantic":
+            return self._compute_pixel_semantic_loss(task_name, criterion, preds, targets, batch)
+        if task_type == "tile_distribution":
+            return self._compute_tile_distribution_loss(task_name, criterion, preds, targets, batch)
+
+        targets = targets.to(preds.device)
+        if task_type == "semantic":
             return criterion(preds, targets.long())
 
         valid_mask = torch.isfinite(targets)
@@ -208,6 +345,7 @@ class MultiTaskModel(LightningModule):
         self,
         targets: Dict[str, Optional[torch.Tensor]],
         outputs: Dict[str, torch.Tensor],
+        batch: Batch,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         losses = {}
         total_loss = None
@@ -215,7 +353,7 @@ class MultiTaskModel(LightningModule):
             task_targets = targets.get(task_name)
             if task_targets is None:
                 continue
-            task_loss = self._compute_task_loss(task_name, preds, task_targets)
+            task_loss = self._compute_task_loss(task_name, preds, task_targets, batch)
             weight = float(self.task_weights.get(task_name, 1.0))
             weighted_loss = task_loss * weight
             losses[task_name] = task_loss
@@ -285,7 +423,7 @@ class MultiTaskModel(LightningModule):
 
     def training_step(self, batch: Batch, batch_idx: int) -> dict:
         targets, outputs = self.forward(batch)
-        loss, losses = self._compute_loss(targets, outputs)
+        loss, losses = self._compute_loss(targets, outputs, batch)
         if self.grad_norm_lite_enabled:
             loss = self._apply_grad_norm_lite(losses)
         if self.log_task_gradient_norms_enabled:
@@ -293,6 +431,7 @@ class MultiTaskModel(LightningModule):
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=False)
         for task_name, task_loss in losses.items():
             self.log(f"train/loss_{task_name}", task_loss, on_step=False, on_epoch=True)
+        self._log_learned_mask_values()
         return {
             "loss": loss,
             "outputs": outputs,
@@ -302,7 +441,7 @@ class MultiTaskModel(LightningModule):
     def validation_step(self, batch: Batch, batch_idx: int) -> dict:
         interpolate = bool(getattr(self.hparams, "interpolate_at_val", True))
         targets, outputs = self.forward(batch, interpolate=interpolate)
-        loss, losses = self._compute_loss(targets, outputs)
+        loss, losses = self._compute_loss(targets, outputs, batch)
         self.log("val/loss", loss, on_step=True, on_epoch=True)
         for task_name, task_loss in losses.items():
             self.log(f"val/loss_{task_name}", task_loss, on_step=False, on_epoch=True)
@@ -315,7 +454,7 @@ class MultiTaskModel(LightningModule):
     def test_step(self, batch: Batch, batch_idx: int):
         interpolate = bool(getattr(self.hparams, "interpolate_at_test", True))
         targets, outputs = self.forward(batch, interpolate=interpolate)
-        loss, losses = self._compute_loss(targets, outputs)
+        loss, losses = self._compute_loss(targets, outputs, batch)
         self.log("test/loss", loss, on_step=False, on_epoch=True)
         for task_name, task_loss in losses.items():
             self.log(f"test/loss_{task_name}", task_loss, on_step=False, on_epoch=True)
