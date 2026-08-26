@@ -1,7 +1,7 @@
 _target_: functools.partial
 _args_: 
   - ${get_method:torch.optim.lr_scheduler.ReduceLROnPlateau}
-mode: "min"
+mode: ${model.monitor_mode}  # "min" for a loss-like monitor, "max" for e.g. val/iou
 factor: 0.5  # halving
 patience: 20  # val epochs
 cooldown: 5  # val epochs

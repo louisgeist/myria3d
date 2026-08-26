@@ -14,6 +14,7 @@ model:
   criterion:
     ignore_index: 15
   monitor: "val/iou"
+  monitor_mode: "max"
 
 callbacks:
   model_checkpoint:

@@ -13,6 +13,7 @@ model:
     ignore_index: 9 # num_classes - 1
 
   monitor: "val/iou"
+  monitor_mode: "max"
 
 callbacks:
   model_checkpoint:

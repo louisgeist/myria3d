@@ -17,6 +17,10 @@ num_workers: 4  # for knn_interpolate
 ## Optimization
 momentum: 0.9  # arbitrary
 monitor: "val/loss_epoch"
+# val/loss_epoch improves by decreasing; ReduceLROnPlateau must know to watch for
+# decreases. Experiments overriding `monitor` to an increasing metric (e.g. "val/iou")
+# must also override this to "max" (see configs/experiment/flair3d*/*.yaml).
+monitor_mode: "min"
 
 defaults:
   - optimizer: Adam.yaml

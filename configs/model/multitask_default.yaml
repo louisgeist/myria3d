@@ -21,6 +21,8 @@ interpolate_at_test: true
 
 momentum: 0.9
 monitor: "val/iou"
+# val/iou improves by increasing; ReduceLROnPlateau must know to watch for increases.
+monitor_mode: "max"
 
 # GradNorm-lite: EMA-based rescaling of per-task losses by 1/EMA(last-layer grad norm).
 # See readme_flair3d.md#loss-balancing-gradnorm-lite. Off by default, opt in per-experiment.
