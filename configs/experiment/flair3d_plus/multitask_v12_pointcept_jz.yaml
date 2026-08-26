@@ -16,6 +16,7 @@ defaults:
 model:
   lr: 1e-3
   monitor: "val/iou"
+  grad_norm_lite: true
 
 logger:
   wandb:

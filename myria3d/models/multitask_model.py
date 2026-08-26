@@ -9,6 +9,13 @@ from torch_geometric.data import Batch
 from torch_geometric.nn import knn
 from torch_geometric.utils import scatter
 
+from myria3d.models.gradnorm_lite import (
+    GradNormLiteEMA,
+    combine_weighted_task_losses,
+    compute_task_gradient_norms,
+    compute_task_last_layer_grad_norms,
+    resolve_grad_norm_lite_scales,
+)
 from myria3d.models.model import MODEL_ZOO, get_neural_net_class
 from myria3d.models.modules.pyg_randla_net_multitask import PyGRandLANetMultiTask
 from myria3d.utils import utils
@@ -80,6 +87,16 @@ class MultiTaskModel(LightningModule):
         self.main_task = kwargs.get("main_task", "segment")
         self.elevation_target_scale = float(kwargs.get("elevation_target_scale", 0.01))
 
+        self.grad_norm_lite_enabled = bool(kwargs.get("grad_norm_lite", False))
+        self.grad_norm_lite_interval = int(kwargs.get("grad_norm_lite_interval", 100))
+        self.grad_norm_lite_task_groups = dict(kwargs.get("grad_norm_lite_task_groups", {}) or {})
+        if self.grad_norm_lite_enabled:
+            self._grad_norm_lite_ema = GradNormLiteEMA(
+                alpha=float(kwargs.get("grad_norm_lite_ema_alpha", 0.1)),
+                eps=float(kwargs.get("grad_norm_lite_eps", 1e-3)),
+            )
+        self.log_task_gradient_norms_enabled = bool(kwargs.get("log_task_gradient_norms", False))
+
         criteria_cfg = kwargs.get("criteria", {})
         self.criteria = nn.ModuleDict()
         for task_name in self.task_configs:
@@ -141,9 +158,7 @@ class MultiTaskModel(LightningModule):
                 features = preds_cpu
             else:
                 features = preds_cpu.unsqueeze(-1)
-            result = _apply_knn_interpolation(
-                features, y_idx, x_idx, weights, num_target_points
-            )
+            result = _apply_knn_interpolation(features, y_idx, x_idx, weights, num_target_points)
             if self._task_type(task_name) != "semantic":
                 result = result.squeeze(-1)
             interpolated[task_name] = result
@@ -176,7 +191,6 @@ class MultiTaskModel(LightningModule):
         preds: torch.Tensor,
         targets: torch.Tensor,
     ) -> torch.Tensor:
-        task_config = self.task_configs[task_name]
         criterion = self.criteria[task_name].to(preds.device)
         targets = targets.to(preds.device)
 
@@ -210,9 +224,72 @@ class MultiTaskModel(LightningModule):
             total_loss = next(iter(outputs.values())).new_zeros(())
         return total_loss, losses
 
+    def _sync_norms_across_ranks(self, norms: Dict[str, float]) -> Dict[str, float]:
+        names = sorted(norms.keys())
+        if not names:
+            return norms
+        values = torch.tensor([norms[name] for name in names], device=self.device)
+        gathered = self.all_gather(values).float().mean(dim=0)
+        return {name: float(gathered[i]) for i, name in enumerate(names)}
+
+    def _apply_grad_norm_lite(self, losses: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Rescale each task's loss by 1/EMA(last-layer grad norm), à la Pointcept's
+        GradNorm-lite. The EMA is refreshed every `grad_norm_lite_interval` steps;
+        the resulting scale is applied to the loss combination every step."""
+        if self.global_step > 0 and self.global_step % self.grad_norm_lite_interval == 0:
+            norms = compute_task_last_layer_grad_norms(
+                self.model.last_backbone_layer_parameters(),
+                losses,
+                self.grad_norm_lite_task_groups,
+            )
+            if self.trainer is not None and self.trainer.world_size > 1:
+                norms = self._sync_norms_across_ranks(norms)
+            self._grad_norm_lite_ema.update(norms)
+            for name, norm in norms.items():
+                self.log(f"train/grad_norm_lite_norm_{name}", norm, on_step=True, on_epoch=False)
+
+        scales = resolve_grad_norm_lite_scales(
+            self._grad_norm_lite_ema, losses.keys(), self.grad_norm_lite_task_groups
+        )
+        for task_name, scale in scales.items():
+            self.log(
+                f"train/grad_norm_lite_scale_{task_name}", scale, on_step=True, on_epoch=False
+            )
+        total_loss, _ = combine_weighted_task_losses(losses, self.task_weights, scales)
+        return total_loss
+
+    def _log_task_gradient_norms(self, losses: Dict[str, torch.Tensor]) -> None:
+        """Diagnostic-only: log per-task backbone/head grad norms and pairwise
+        backbone-gradient cosine similarities between tasks. Does not affect training."""
+        result = compute_task_gradient_norms(
+            self.model.backbone_parameters(),
+            {task_name: self.model.task_head_parameters(task_name) for task_name in losses},
+            losses,
+            self.task_weights,
+        )
+        for task_name, norm in result["norms"].items():
+            self.log(
+                f"train/task_grad_norm_backbone_{task_name}",
+                norm["backbone"],
+                on_step=True,
+                on_epoch=False,
+            )
+            self.log(
+                f"train/task_grad_norm_head_{task_name}",
+                norm["head"],
+                on_step=True,
+                on_epoch=False,
+            )
+        for pair_name, cos in result["backbone_cos"].items():
+            self.log(f"train/task_grad_cos_{pair_name}", cos, on_step=True, on_epoch=False)
+
     def training_step(self, batch: Batch, batch_idx: int) -> dict:
         targets, outputs = self.forward(batch)
         loss, losses = self._compute_loss(targets, outputs)
+        if self.grad_norm_lite_enabled:
+            loss = self._apply_grad_norm_lite(losses)
+        if self.log_task_gradient_norms_enabled:
+            self._log_task_gradient_norms(losses)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=False)
         for task_name, task_loss in losses.items():
             self.log(f"train/loss_{task_name}", task_loss, on_step=False, on_epoch=True)

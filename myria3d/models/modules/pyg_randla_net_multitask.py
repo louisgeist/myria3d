@@ -110,3 +110,29 @@ class PyGRandLANetMultiTask(torch.nn.Module):
             else:
                 outputs[task_name] = logits.log_softmax(dim=-1)
         return outputs
+
+    def last_backbone_layer_parameters(self):
+        """Parameters of the last shared layer before any task head runs."""
+        return list(self.fp1.parameters())
+
+    def backbone_parameters(self):
+        """Parameters of the shared backbone (excludes all task heads)."""
+        modules = (
+            self.fc0,
+            self.block1,
+            self.block2,
+            self.block3,
+            self.block4,
+            self.mlp_summit,
+            self.fp4,
+            self.fp3,
+            self.fp2,
+            self.fp1,
+        )
+        return [p for module in modules for p in module.parameters()]
+
+    def task_head_parameters(self, task_name: str):
+        """Parameters of a single task's head (mlp_head + fc_head)."""
+        return list(self.mlp_heads[task_name].parameters()) + list(
+            self.fc_heads[task_name].parameters()
+        )

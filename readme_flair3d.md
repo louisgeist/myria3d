@@ -208,6 +208,7 @@ To use classic epoch-based training instead, set `total_iters=null` and configur
 | `configs/datamodule/pointcept_npy_datamodule.yaml` | Datamodule for Pointcept preprocessed data |
 | `configs/dataset_description/flair3d_plus_multitask.yaml` | Task dims, weights, elevation scale |
 | `configs/model/pyg_randla_net_multitask_model.yaml` | `PyGRandLANetMultiTask` hparams |
+| `configs/model/multitask_default.yaml` | GradNorm-lite + task-weight defaults |
 | `configs/callbacks/multitask.yaml` | Per-task metrics, early stopping on `val/iou` (segment) |
 
 ### Code map
@@ -224,6 +225,7 @@ To use classic epoch-based training instead, set `total_iters=null` and configur
 | Training schedule resolver | `myria3d/utils/training_schedule.py` |
 | Multitask backbone | `myria3d/models/modules/pyg_randla_net_multitask.py` |
 | Lightning module | `myria3d/models/multitask_model.py` |
+| GradNorm-lite + diagnostic gradient-norm utilities | `myria3d/models/gradnorm_lite.py` |
 | Metrics callback | `myria3d/callbacks/multitask_metric_callbacks.py` |
 
 ### Dependencies
@@ -240,6 +242,32 @@ mamba env update -f environment.yml
 - Per-task: `val/iou_forest`, `val/iou_land_use`, `val/iou_natural_habitat`
 - Regression: `val/elevation_mae`, `val/elevation_rmse`
 - Per-task losses: `train/loss_segment`, `train/loss_forest`, …
+
+### Loss balancing (GradNorm-lite)
+
+Ported from Pointcept (`pointcept/utils/gradient_norm.py`, wired in `pointcept/engines/train.py`)
+— not the original GradNorm (Chen et al. 2018), a simpler heuristic that keeps every task's
+raw-loss gradient contributing at a similar scale: an EMA of each task's loss gradient norm
+w.r.t. the last shared backbone layer (`fp1` in `PyGRandLANetMultiTask`), refreshed every
+`grad_norm_lite_interval` steps, used to rescale each task's loss by `1 / max(EMA, eps)` before
+summing with the static `task_weights`:
+
+```
+train/loss = Σ_t  loss_t · task_weights[t] · (1 / max(EMA_t, grad_norm_lite_eps))
+```
+
+Config (`configs/model/multitask_default.yaml`): `grad_norm_lite` (off by default),
+`grad_norm_lite_interval` (default 100), `grad_norm_lite_ema_alpha` (EMA smoothing, default 0.1),
+`grad_norm_lite_eps` (default 1e-3), `grad_norm_lite_task_groups` (optional `task -> group`
+map to pool correlated tasks' losses before probing — unused by default, all 5 Flair3D+ tasks are
+independent). Enabled in `configs/experiment/flair3d_plus/multitask_v12_pointcept_jz.yaml`.
+
+Logged keys: `train/grad_norm_lite_scale_{task}` (every step), `train/grad_norm_lite_norm_{task}`
+(only on measurement steps). A separate, diagnostic-only toggle `log_task_gradient_norms` (off by
+default — costs one extra gradient probe per task **every** step) logs
+`train/task_grad_norm_backbone_{task}`, `train/task_grad_norm_head_{task}`, and pairwise
+`train/task_grad_cos_{task_a}__{task_b}` backbone-gradient cosine similarities, without affecting
+the loss — useful to check whether tasks are fighting each other during training.
 
 ---
 
