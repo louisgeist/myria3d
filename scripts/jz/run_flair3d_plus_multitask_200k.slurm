@@ -12,7 +12,7 @@
 #SBATCH --hint=nomultithread
 
 #SBATCH --job-name=myria3d-200k
-#SBATCH --time=16:00:00
+#SBATCH --time=19:45:00
 # 200k iterations is ~20x the reference 10k run this --time budget comes from
 # (scripts/jz/launch_h100.sh) -- it will very likely need several resubmissions.
 # Adjust --time to your actual throughput/QOS. To resume past the time limit,
