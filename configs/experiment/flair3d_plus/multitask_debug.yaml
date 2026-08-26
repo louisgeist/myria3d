@@ -1,0 +1,58 @@
+# @package _global_
+# Quick smoke-test for the Flair3D+ multitask Pointcept-npy pipeline: same wiring as
+# flair3d_plus/multitask.yaml, but tiny iteration counts, no wandb, and capped val/test
+# batches — just enough to confirm the pipeline runs end-to-end after a code change.
+#
+#   python run.py experiment=flair3d_plus/multitask_debug
+#
+# Override data_root/csv_manifest from the CLI if D067 isn't your local manifest.
+
+max_num_nodes: 40000
+
+defaults:
+  - override /datamodule: pointcept_npy_datamodule.yaml
+  - override /model: pyg_randla_net_multitask_model.yaml
+  - override /callbacks: multitask.yaml
+  - override /datamodule/transforms/augmentations: light_radiometry.yaml
+  - override /logger: csv.yaml
+  - override /dataset_description: flair3d_plus_multitask.yaml
+  - override /datamodule/transforms/preparations: points_budget_flair3d_plus_multitask.yaml
+  - override /datamodule/transforms/normalizations: multitask.yaml
+
+model:
+  lr: 1e-3
+  monitor: "val/iou"
+  grad_norm_lite: true
+
+# 4 epochs x 5 optimizer steps = 20 steps total, validating every epoch.
+total_iters: 20
+iter_per_epoch: 5
+eval_every: 1
+
+trainer:
+  num_sanity_val_steps: 0
+  accelerator: gpu
+  limit_val_batches: 2
+  limit_test_batches: 2
+
+datamodule:
+  batch_size: 2
+  num_workers: 1
+  data_root: /data/geist/Pointcept/data/flair3d_plus
+  csv_manifest: ${datamodule.data_root}/raw/scene_split_manifest_D067.csv
+  tile_width: 100
+  subtile_width: 50
+  transforms:
+    preparations:
+      train:
+        MaximumNumNodes:
+          _args_:
+            - ${max_num_nodes}
+      eval:
+        MaximumNumNodes:
+          _args_:
+            - ${max_num_nodes}
+      predict:
+        MaximumNumNodes:
+          _args_:
+            - ${max_num_nodes}
