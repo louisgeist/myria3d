@@ -5,7 +5,8 @@
 #
 #   python run.py experiment=flair3d_plus/multitask_debug
 #
-# Override data_root/csv_manifest from the CLI if D067 isn't your local manifest.
+# data_root/csv_manifest default to Hecate; export FLAIR3D_DATA_ROOT / FLAIR3D_CSV_MANIFEST
+# (or override on the CLI) if D067 isn't your local manifest.
 
 max_num_nodes: 40000
 
@@ -38,8 +39,10 @@ trainer:
 datamodule:
   batch_size: 2
   num_workers: 1
-  data_root: /data/geist/Pointcept/data/flair3d_plus
-  csv_manifest: ${datamodule.data_root}/raw/scene_split_manifest_D067.csv
+  # Hecate defaults; override by exporting FLAIR3D_DATA_ROOT / FLAIR3D_CSV_MANIFEST
+  # (e.g. on Jean Zay, see scripts/jz/launch_h100.sh) or via CLI.
+  data_root: ${oc.env:FLAIR3D_DATA_ROOT,/data/geist/Pointcept/data/flair3d_plus}
+  csv_manifest: ${oc.env:FLAIR3D_CSV_MANIFEST,${datamodule.data_root}/raw/scene_split_manifest_D067.csv}
   tile_width: 100
   subtile_width: 50
   transforms:

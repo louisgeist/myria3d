@@ -130,7 +130,12 @@ Tiles must already be preprocessed by [Pointcept](https://github.com/Pointcept/P
 python run.py experiment=flair3d_plus/multitask
 ```
 
-Hecate defaults in the experiment YAML: `data_root=/data/geist/Pointcept/data/flair3d_plus` and the D067 manifest. Jean Zay overrides `data_root` / `csv_manifest` (see `scripts/jz/launch_h100.sh`).
+Hecate defaults in the experiment YAML: `data_root=/data/geist/Pointcept/data/flair3d_plus` and the D067 manifest — resolved via `${oc.env:FLAIR3D_DATA_ROOT,...}` / `${oc.env:FLAIR3D_CSV_MANIFEST,...}`, so exporting those two env vars (or passing `datamodule.data_root=`/`datamodule.csv_manifest=` on the CLI) overrides them without touching the YAML. Jean Zay sets both via `scripts/jz/launch_h100.sh` (CLI form); for interactive JZ runs, export them directly, e.g.:
+
+```bash
+export FLAIR3D_DATA_ROOT=/lustre/fsn1/projects/rech/unv/usi32yh/data_pointcept/flair3d_plus
+export FLAIR3D_CSV_MANIFEST=${FLAIR3D_DATA_ROOT}/raw/scene_split_manifest.csv
+```
 
 Prerequisites:
 
