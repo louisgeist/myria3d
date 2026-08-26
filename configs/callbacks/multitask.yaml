@@ -30,3 +30,13 @@ multitask_metrics:
   main_task: ${dataset_description.main_task}
   elevation_target_scale: ${dataset_description.elevation_target_scale}
   classification_dict: ${dataset_description.classification_dict}
+
+# Write Pointcept-format dense rasters at test time so tools/eval_network_apls.py
+# can be run unchanged (``{patch_id}_logits_network.npy``). Relative to Hydra cwd.
+pointcept_pred_dump:
+  _target_: myria3d.callbacks.pointcept_pred_dump.PointceptPredictionDump
+  task_configs: ${dataset_description.task_configs}
+  output_dir: result
+  enabled: true
+  phases:
+    - test
