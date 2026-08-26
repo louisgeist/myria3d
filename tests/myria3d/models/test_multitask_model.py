@@ -3,6 +3,7 @@ import functools
 import pytest
 import pytorch_lightning as pl
 import torch
+from lightning_fabric.utilities.exceptions import MisconfigurationException
 from torch.utils.data import DataLoader, Dataset
 from torch_geometric.data import Batch, Data
 
@@ -153,3 +154,53 @@ def test_log_task_gradient_norms_logs_diagnostic_keys_without_affecting_loss():
     assert "train/task_grad_norm_head_segment" in metrics
     assert "train/task_grad_cos_segment__elevation" in metrics
     assert -1.0 <= metrics["train/task_grad_cos_segment__elevation"].item() <= 1.0
+
+
+def test_configure_optimizers_uses_lr_scheduler_frequency():
+    model = _make_model(
+        lr_scheduler=functools.partial(torch.optim.lr_scheduler.ReduceLROnPlateau),
+        lr_scheduler_frequency=5,
+    )
+    opt_cfg = model.configure_optimizers()
+    assert opt_cfg["lr_scheduler"]["frequency"] == 5
+    assert opt_cfg["lr_scheduler"]["monitor"] == "val/iou"
+    assert opt_cfg["lr_scheduler"]["interval"] == "epoch"
+
+
+def _make_plateau_trainer(max_epochs, check_val_every_n_epoch=5):
+    return pl.Trainer(
+        accelerator="cpu",
+        devices=1,
+        max_epochs=max_epochs,
+        limit_train_batches=1,
+        num_sanity_val_steps=0,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        check_val_every_n_epoch=check_val_every_n_epoch,
+    )
+
+
+def test_reduce_lr_on_plateau_does_not_step_before_first_validation():
+    """Reproduce the Jean Zay crash: ReduceLROnPlateau must not look up val/iou
+    on epochs where validation did not run (eval_every > 1)."""
+    model = _make_model(
+        lr_scheduler=functools.partial(torch.optim.lr_scheduler.ReduceLROnPlateau),
+        lr_scheduler_frequency=5,
+        monitor="val/iou",
+    )
+    trainer = _make_plateau_trainer(max_epochs=2, check_val_every_n_epoch=5)
+    trainer.fit(model, train_dataloaders=_make_dataloader(_make_batches(2)))
+
+
+def test_reduce_lr_on_plateau_raises_when_frequency_not_aligned():
+    """Lock in the original bug: stepping every epoch without val/iou crashes."""
+    model = _make_model(
+        lr_scheduler=functools.partial(torch.optim.lr_scheduler.ReduceLROnPlateau),
+        lr_scheduler_frequency=1,
+        monitor="val/iou",
+    )
+    trainer = _make_plateau_trainer(max_epochs=1, check_val_every_n_epoch=5)
+    with pytest.raises(MisconfigurationException, match="val/iou"):
+        trainer.fit(model, train_dataloaders=_make_dataloader(_make_batches(1)))
