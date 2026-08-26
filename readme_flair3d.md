@@ -116,7 +116,7 @@ Default entry point: `experiment=flair3d_plus/multitask`. It trains from Pointce
 | `nathab_bioclimatic_zone` | same → `by_climatic_domain` | tile_distribution | 3 | 3 |
 | `elevation` | `elevation.npy` (`z_lidar - DTM`) | per-point regression | 1 | NaN masked |
 
-`forest_2d.npy` / `network.npy` are produced by Pointcept's `rasterize_forest.py` / `rasterize_network.py` (run outside myria3d). Roads training is raster CE with foreground weight 5; graph APLS evaluation is a follow-up, not part of this recipe.
+`forest_2d.npy` / `network.npy` are produced by Pointcept's `rasterize_forest.py` / `rasterize_network.py` (run outside myria3d). Roads training is raster CE with foreground weight 5. Graph APLS is scored after test by Pointcept `eval_network_apls.py` on the dumped `{patch_id}_logits_network.npy` rasters (see Monitoring).
 
 Elevation target: `z_lidar - DTM` (meters). Training uses scale `0.01` and `SmoothL1Loss`.
 
@@ -182,7 +182,7 @@ To use classic epoch-based training instead, set `total_iters=null` and configur
 | `configs/model/pyg_randla_net_multitask_model.yaml` | `PyGRandLANetMultiTask` hparams |
 | `configs/model/multitask_default.yaml` | GradNorm-lite, learned RGB/intensity fill-in, task-weight defaults |
 | `configs/datamodule/transforms/augmentations/light_radiometry.yaml` | XY flips + RandomDropColor / RandomDropStrength |
-| `configs/callbacks/multitask.yaml` | Per-task metrics, early stopping on `val/iou` (segment) |
+| `configs/callbacks/multitask.yaml` | Per-task metrics, early stopping on `val/iou` (segment), Pointcept pred dump |
 
 ### Code map
 
@@ -198,10 +198,12 @@ To use classic epoch-based training instead, set `total_iters=null` and configur
 | Training schedule resolver | `myria3d/utils/training_schedule.py` |
 | Multitask backbone | `myria3d/models/modules/pyg_randla_net_multitask.py` |
 | Pixel-semantic pooling | `myria3d/models/modules/pixel_pooling.py` |
+| Dilated (buffer) P/R/F1 | `myria3d/models/dilated_metrics.py` |
 | Tile-distribution loss | `myria3d/models/losses.py` |
 | Lightning module | `myria3d/models/multitask_model.py` |
 | GradNorm-lite + diagnostic gradient-norm utilities | `myria3d/models/gradnorm_lite.py` |
 | Metrics callback | `myria3d/callbacks/multitask_metric_callbacks.py` |
+| Pointcept-format pred dump (APLS) | `myria3d/callbacks/pointcept_pred_dump.py` |
 
 ### Dependencies
 
@@ -218,14 +220,31 @@ Logged every epoch (`train/` / `val/` / `test/`). `val/iou` (segment mIoU) remai
 | Task | Headline | Also logged |
 |------|----------|-------------|
 | `segment` | `{split}/segment/mIoU` | `{split}/segment/iou/{class}` (val/test), alias `{split}/iou` |
-| `forest_2d`, `roads` | `{split}/{task}/mIoU` | cell-pooled IoU; `{split}/{task}/iou/{class}` (val/test) |
+| `forest_2d`, `roads` | `{split}/{task}/mIoU` | cell-pooled IoU; `{split}/{task}/iou/{class}` (val/test); cell-level `{split}/{task}/precision`, `recall`, `f1` |
+| `roads` (only) | `{split}/roads/dilated_f1` | buffer P/R/F1, Chebyshev 3 px (8-connect), like Pointcept `network` |
 | `elevation` | `{split}/reg/elevation/mae` | RMSE; values in **meters** |
 | `nathab_*` | `{split}/tv/{task}` | weighted KL; per-class frequency MAE `{split}/mae/{task}/{class}` |
 | all 4 nathab axes | `{split}/tv/nathab_total` | **unweighted sum** of the 4 axis TVs (Pointcept) |
 
 Nathab TV: pool each tile to distributions `(pi_hat, q_t)`, accumulate `n_t · |pi_hat - q_t|` over tiles, then `TV = sum_c (abs_weighted_c / sum n_t)`. That is the point-count-weighted mean of per-tile L1. `nathab_total` then **adds the four axis TVs** (no extra weighting).
 
-Graph **APLS** is not logged here (needs dense raster export + ROI stitching; Pointcept `NetworkAPLSEvaluator`). Roads monitoring is raster mIoU / per-class IoU only.
+Pixel-semantic P/R/F1 is computed after pooling points to raster cells (same grouping as the loss / mIoU). Dilated (buffer) P/R/F1 reconstructs each 50 m subtile's observed cells onto the stored `H×W` grid and applies a 3-pixel Chebyshev dilation — matching Pointcept `network` (`buffer_radius_px=3`, `enable_dilated_prf=True`). `forest_2d` logs exact P/R/F1 only (`enable_dilated_prf=False`): the buffer is a thin-line diagnostic, not an area-coverage one. Unobserved cells (no points) are not scored.
+
+Graph **APLS** is not computed in myria3d. At test time, `PointceptPredictionDump` writes Pointcept-format dense rasters under Hydra's run directory (`result/{patch_id}_logits_network.npy`, plus `..._logits_forest_2d.npy`): `(C, H, W)` float32 foreground probabilities, NaN on unobserved 1 m cells, 100 m patch grid (the four 50 m quadrants are nanmean-merged). Then run Pointcept's evaluator unchanged:
+
+```bash
+cd /data/geist/Pointcept && conda activate pointcept
+python tools/eval_network_apls.py \
+  --data_root data/flair3d_plus \
+  --save_path /path/to/myria3d/logs/runs/YYYY-MM-DD/HH-MM-SS/result \
+  --network_graphs_root /data/geist/Flair3D-build/data/network_graphs \
+  --split_manifest_csv data/flair3d_plus/raw/scene_split_manifest_D067.csv \
+  --split test --threshold 0.2 \
+  --network_types ROADS \
+  --out_dir /path/to/myria3d/logs/runs/YYYY-MM-DD/HH-MM-SS/result
+```
+
+`--network_types ROADS` is required: myria3d (like current Pointcept configs) dumps a single roads channel (`C=1`), not railroads/transmission lines. Override dump dir / disable with `callbacks.pointcept_pred_dump.output_dir=...` or `callbacks.pointcept_pred_dump.enabled=false`.
 
 Per-task losses: `train/loss_segment`, `train/loss_forest_2d`, `train/loss_roads`, `train/loss_nathab_*`, …
 

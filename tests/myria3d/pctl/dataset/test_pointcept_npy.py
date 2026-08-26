@@ -6,7 +6,11 @@ import numpy as np
 import pytest
 import torch
 
-from myria3d.pctl.dataset.pointcept_npy import build_scene_list, load_pointcept_scene
+from myria3d.pctl.dataset.pointcept_npy import (
+    PointceptNpyDataset,
+    build_scene_list,
+    load_pointcept_scene,
+)
 
 
 def _write_manifest(path: str, rows):
@@ -71,6 +75,20 @@ def test_build_scene_list_expands_val_into_four_subtiles(pointcept_manifest_tree
     assert len({entry[0] for entry in val_entries}) == 1
 
 
+def test_pointcept_npy_dataset_sets_patch_id(pointcept_manifest_tree):
+    data_root, manifest = pointcept_manifest_tree
+    dataset = PointceptNpyDataset(
+        data_root=data_root,
+        csv_manifest=manifest,
+        tile_width=100,
+        subtile_width=50,
+        train_transform=None,
+        eval_transform=None,
+    )
+    data = dataset[0]
+    assert data.patch_id == "D067-2021_UU-S1-31_1-1"
+
+
 def test_load_pointcept_scene_merges_buildings_and_maps_void(tmp_path):
     scene_dir = tmp_path / "scene"
     scene_dir.mkdir()
@@ -122,8 +140,12 @@ def test_load_pointcept_scene_pixel_semantic_and_nathab_axes(tmp_path):
 
     assert torch.equal(data.y_forest_2d, torch.tensor([0, 1, 2, 1]))
     assert torch.equal(data.forest_2d_cell_id, torch.tensor([0, 1, 2, 3]))
+    assert torch.equal(data.forest_2d_raster_h, torch.tensor([2]))
+    assert torch.equal(data.forest_2d_raster_w, torch.tensor([2]))
     assert torch.equal(data.y_roads, torch.tensor([0, 1, 0, 0]))
     assert torch.equal(data.roads_cell_id, torch.tensor([0, 1, 2, 3]))
+    assert torch.equal(data.roads_raster_h, torch.tensor([2]))
+    assert torch.equal(data.roads_raster_w, torch.tensor([2]))
     # Axis 0 (open / humid / acid / temperate) vs void on every axis.
     assert torch.equal(data.y_nathab_habitat_type, torch.tensor([0, 0, 4, 4]))
     assert torch.equal(data.y_nathab_moisture_regime, torch.tensor([0, 0, 3, 3]))
@@ -140,8 +162,12 @@ def test_load_pointcept_scene_missing_raster_and_nathab_fallback(tmp_path):
 
     assert torch.equal(data.forest_2d_cell_id, torch.tensor([-1, -1, -1]))
     assert torch.equal(data.y_forest_2d, torch.tensor([2, 2, 2]))
+    assert torch.equal(data.forest_2d_raster_h, torch.tensor([0]))
+    assert torch.equal(data.forest_2d_raster_w, torch.tensor([0]))
     assert torch.equal(data.roads_cell_id, torch.tensor([-1, -1, -1]))
     assert torch.equal(data.y_roads, torch.tensor([2, 2, 2]))
+    assert torch.equal(data.roads_raster_h, torch.tensor([0]))
+    assert torch.equal(data.roads_raster_w, torch.tensor([0]))
     # Missing natural_habitat.npy is filled with raw id 43 (void on every axis).
     assert torch.equal(data.y_nathab_habitat_type, torch.tensor([4, 4, 4]))
     assert torch.equal(data.y_nathab_moisture_regime, torch.tensor([3, 3, 3]))

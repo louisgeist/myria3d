@@ -294,11 +294,16 @@ def load_pointcept_scene(scene_dir: str) -> Data:
                 else raster[0]
             )
             cell_id, label = _assign_raster_cells(pos_xy, raster_2d, raster_meta, ignore_index)
+            raster_h, raster_w = int(raster_2d.shape[0]), int(raster_2d.shape[1])
         else:
             cell_id = np.full(num_points, -1, dtype=np.int64)
             label = np.full(num_points, ignore_index, dtype=np.int64)
+            raster_h, raster_w = 0, 0
         kwargs[f"{task_name}_cell_id"] = torch.from_numpy(cell_id)
         kwargs[f"y_{task_name}"] = torch.from_numpy(label)
+        # Graph-level (1,) so GridSampling / subsample_data leave them alone.
+        kwargs[f"{task_name}_raster_h"] = torch.tensor([raster_h], dtype=torch.long)
+        kwargs[f"{task_name}_raster_w"] = torch.tensor([raster_w], dtype=torch.long)
 
     # natural_habitat.npy stores raw (near-raw) CarHab ids; remapped here into 4
     # low-cardinality ecological axes (tile_distribution targets), never used directly.
@@ -349,6 +354,9 @@ class PointceptNpyDataset(Dataset):
     def __getitem__(self, idx: int) -> Optional[Data]:
         scene_dir, split, subtile_index = self._scenes[idx]
         data = load_pointcept_scene(scene_dir)
+        # Pointcept PreciseEvaluator file stem is the 100 m patch folder name.
+        patch_id = osp.basename(osp.normpath(scene_dir))
+        data.patch_id = patch_id
 
         if self.pre_filter and self.pre_filter(data):
             return None
@@ -365,6 +373,8 @@ class PointceptNpyDataset(Dataset):
         if not data or (self.pre_filter and self.pre_filter(data)):
             return None
 
+        # Re-attach in case a transform dropped the python string attribute.
+        data.patch_id = patch_id
         return data
 
     def _indices_for_split(self, split: SPLIT_TYPE) -> List[int]:
