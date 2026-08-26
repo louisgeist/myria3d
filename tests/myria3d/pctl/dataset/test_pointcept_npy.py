@@ -3,8 +3,9 @@ import os
 
 import numpy as np
 import pytest
+import torch
 
-from myria3d.pctl.dataset.pointcept_npy import build_scene_list
+from myria3d.pctl.dataset.pointcept_npy import build_scene_list, load_pointcept_scene
 
 
 def _write_manifest(path: str, rows):
@@ -67,3 +68,14 @@ def test_build_scene_list_expands_val_into_four_subtiles(pointcept_manifest_tree
     assert len(val_entries) == 4
     assert [entry[2] for entry in val_entries] == [0, 1, 2, 3]
     assert len({entry[0] for entry in val_entries}) == 1
+
+
+def test_load_pointcept_scene_merges_buildings_and_maps_void(tmp_path):
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    np.save(scene_dir / "coord.npy", np.zeros((4, 3), dtype=np.float32))
+    np.save(scene_dir / "segment.npy", np.array([0, 15, 16, -1], dtype=np.int32))
+
+    data = load_pointcept_scene(str(scene_dir))
+
+    assert torch.equal(data.y, torch.tensor([0, 0, 0, 15]))

@@ -45,6 +45,12 @@ _SEGMENT_NAMES: Tuple[str, ...] = (
     "Void",
 )
 
+# Source taxonomy uses 15=Industrial and 16=Tertiary; both merge into Building (0).
+# Void is not a source id (npy uses negatives). LUT index 255 is a safe missing-fill
+# raw id that already maps to train void (15).
+_SEGMENT_VOID_TRAIN_ID = 15
+_SEGMENT_MISSING_FILL_RAW_ID = 255
+
 _FOREST_NAMES: Tuple[str, ...] = ("Not Forest", "Forest", "Void")
 
 _LAND_USE_NAMES: Tuple[str, ...] = (
@@ -284,9 +290,11 @@ def build_lut_from_groups(
 
 
 def _build_segment_lut(num_raw: int = 256, void_train_id: int = 15) -> np.ndarray:
-  """Identity for 0..15; overflow and invalid raw ids map to void."""
+  """Identity for 0..14; industrial/tertiary (15/16) -> Building (0); rest -> void."""
   lut = np.full(num_raw, void_train_id, dtype=np.int32)
-  lut[: void_train_id + 1] = np.arange(void_train_id + 1, dtype=np.int32)
+  lut[:void_train_id] = np.arange(void_train_id, dtype=np.int32)
+  lut[15] = 0
+  lut[16] = 0
   return lut
 
 
@@ -323,15 +331,14 @@ def _make_definition(
 
 def _register_segment_definitions() -> Dict[str, LabelDefinition]:
   segment_lut = _build_segment_lut()
-  segment_void = 15
   base = _make_definition(
     "segment",
     "default",
     num_raw_classes=segment_lut.shape[0],
     lut=segment_lut,
     names=_SEGMENT_NAMES,
-    ignore_index=segment_void,
-    missing_fill_raw_id=segment_void,
+    ignore_index=_SEGMENT_VOID_TRAIN_ID,
+    missing_fill_raw_id=_SEGMENT_MISSING_FILL_RAW_ID,
     source_field="semantic",
   )
   # Upstream PLY may already use inter_finerall10 train ids; same LUT/metadata.
@@ -341,8 +348,8 @@ def _register_segment_definitions() -> Dict[str, LabelDefinition]:
     num_raw_classes=segment_lut.shape[0],
     lut=segment_lut.copy(),
     names=_SEGMENT_NAMES,
-    ignore_index=segment_void,
-    missing_fill_raw_id=segment_void,
+    ignore_index=_SEGMENT_VOID_TRAIN_ID,
+    missing_fill_raw_id=_SEGMENT_MISSING_FILL_RAW_ID,
     source_field="semantic",
   )
   return {"default": base, "inter_finerall10": inter_finerall10}

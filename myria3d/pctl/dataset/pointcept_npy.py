@@ -14,6 +14,7 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
 from myria3d.pctl.dataset.flair3d import load_excluded_tiles_from_details_csv
+from myria3d.pctl.dataset.flair3d_label_remap import apply_remap, get_definition
 from myria3d.pctl.dataset.utils import (
     SPLIT_TYPE,
     get_num_subtiles,
@@ -183,11 +184,14 @@ def load_pointcept_scene(scene_dir: str) -> Data:
             values = np.load(asset_path).reshape(-1)
             if data_key == "y_elevation":
                 kwargs[data_key] = torch.from_numpy(values.astype(np.float32, copy=False))
+            elif data_key == "y":
+                remapped = apply_remap(
+                    values.astype(np.int64, copy=False),
+                    get_definition("segment", "default"),
+                )
+                kwargs[data_key] = torch.from_numpy(remapped.astype(np.int64, copy=False))
             else:
-                tensor = torch.from_numpy(values.astype(np.int64, copy=False))
-                if data_key == "y":
-                    tensor[tensor < 0] = MULTITASK_MISSING_FILLS["y"]
-                kwargs[data_key] = tensor
+                kwargs[data_key] = torch.from_numpy(values.astype(np.int64, copy=False))
         elif data_key == "y_elevation":
             kwargs[data_key] = torch.full(
                 (num_points,), float("nan"), dtype=torch.float32

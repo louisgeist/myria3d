@@ -36,6 +36,10 @@ criteria:
   segment:
     _target_: torch.nn.CrossEntropyLoss
     ignore_index: 15
+    weight:
+      _target_: torch.FloatTensor
+      _args_:
+        - ${dataset_description.class_weights}
   forest:
     _target_: torch.nn.CrossEntropyLoss
     ignore_index: 2
