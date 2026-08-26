@@ -30,7 +30,7 @@ d_in: 5
 num_classes: 16
 
 main_task: segment
-elevation_target_scale: 0.01
+elevation_target_scale: 1.0
 
 task_configs:
   segment:
@@ -45,6 +45,9 @@ task_configs:
     pooling: mean
     names: ["Not Forest", "Forest"]
     enable_dilated_prf: false
+    # Pool backbone features to raster cells, then classify once per cell (Pointcept's
+    # pixel_semantic recipe), instead of classifying per-point and pooling logits.
+    pool_before_head: true
   roads:
     task_type: pixel_semantic
     # Label ids 0=Background, 1=Road; void (out of raster grid) is masked via ignore_index.

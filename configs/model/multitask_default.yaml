@@ -70,7 +70,7 @@ criteria:
     _target_: myria3d.models.losses.WeightedKLDivLoss
   elevation:
     _target_: torch.nn.SmoothL1Loss
-    beta: 0.01
+    beta: 1.0
 
 defaults:
   - optimizer: Adam.yaml

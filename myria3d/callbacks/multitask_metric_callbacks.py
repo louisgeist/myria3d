@@ -79,7 +79,7 @@ class MultiTaskMetrics(Callback):
         self,
         task_configs: dict,
         main_task: str = "segment",
-        elevation_target_scale: float = 0.01,
+        elevation_target_scale: float = 1.0,
         classification_dict: Optional[Dict[int, str]] = None,
     ):
         self.task_configs = task_configs

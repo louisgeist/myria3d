@@ -58,6 +58,41 @@ def pool_points_by_cell(
     return pooled_preds, pooled_target, pooled_cell_id, pooled_batch
 
 
+def pool_and_broadcast_by_cell(
+    features: Tensor,
+    cell_id: Tensor,
+    batch_index: Tensor,
+    pooling: str = "mean",
+) -> Tensor:
+    """Pool per-point features to (scene, raster-cell) groups, then broadcast each
+    group's pooled value back to every point in it (Pointcept's pixel_semantic recipe:
+    pool backbone features, classify once per cell, rather than classify per-point then
+    pool logits). Points with ``cell_id < 0`` (outside the raster grid) are returned
+    unchanged — they carry no supervision and are dropped by `pool_points_by_cell`
+    downstream regardless of what value they hold here.
+    """
+    valid = cell_id >= 0
+    if not bool(valid.any()):
+        return features
+
+    valid_cell_id = cell_id[valid].to(torch.int64)
+    if int(valid_cell_id.max()) >= CELL_ID_SCENE_STRIDE:
+        raise ValueError(
+            "cell_id exceeds CELL_ID_SCENE_STRIDE; raster grid too large to pool safely."
+        )
+
+    group_key = batch_index[valid].to(torch.int64) * CELL_ID_SCENE_STRIDE + valid_cell_id
+    _, inverse = torch.unique(group_key, return_inverse=True)
+    num_groups = int(inverse.max().item()) + 1
+
+    reduce = "mean" if pooling == "mean" else "max"
+    pooled = scatter(features[valid], inverse, dim=0, dim_size=num_groups, reduce=reduce)
+
+    out = features.clone()
+    out[valid] = pooled[inverse]
+    return out
+
+
 def scatter_cell_values_to_raster(
     values: Tensor,
     cell_id: Tensor,

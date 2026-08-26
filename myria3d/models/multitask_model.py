@@ -93,7 +93,7 @@ class MultiTaskModel(LightningModule):
         self.task_configs = kwargs.get("task_configs", {})
         self.task_weights = kwargs.get("task_weights", {})
         self.main_task = kwargs.get("main_task", "segment")
-        self.elevation_target_scale = float(kwargs.get("elevation_target_scale", 0.01))
+        self.elevation_target_scale = float(kwargs.get("elevation_target_scale", 1.0))
 
         # Pooled tasks (pixel_semantic, tile_distribution) are always evaluated at the
         # model's native (subsampled) resolution — never KNN-interpolated to the full
@@ -252,8 +252,20 @@ class MultiTaskModel(LightningModule):
     def forward(
         self, batch: Batch, *, interpolate: bool = True
     ) -> Tuple[Dict[str, Optional[torch.Tensor]], Dict[str, torch.Tensor]]:
+        # Tasks configured with `pool_before_head` (e.g. forest_2d) have their per-task
+        # head run on backbone features already pooled to raster cells (Pointcept's
+        # pixel_semantic recipe) — see PyGRandLANetMultiTask.forward.
+        pooled_head_cell_ids = {
+            name: getattr(batch, f"{name}_cell_id")
+            for name, cfg in self.task_configs.items()
+            if cfg.get("pool_before_head", False)
+        }
         raw_outputs = self.model(
-            self._fill_masked_features(batch), batch.pos, batch.batch, batch.ptr
+            self._fill_masked_features(batch),
+            batch.pos,
+            batch.batch,
+            batch.ptr,
+            pooled_head_cell_ids=pooled_head_cell_ids,
         )
 
         # Pooled tasks (pixel_semantic, tile_distribution) always use the raw, subsampled
@@ -370,11 +382,13 @@ class MultiTaskModel(LightningModule):
         gathered = self.all_gather(values).float().mean(dim=0)
         return {name: float(gathered[i]) for i, name in enumerate(names)}
 
-    def _apply_grad_norm_lite(self, losses: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def _apply_grad_norm_lite(self, losses: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Rescale each task's loss by 1/EMA(last-layer grad norm), à la Pointcept's
-        GradNorm-lite. The EMA is refreshed every `grad_norm_lite_interval` steps;
+        GradNorm-lite. The EMA is refreshed every `grad_norm_lite_interval` steps within
+        the current training epoch (Pointcept's `engines/train.py` resets its iteration
+        counter every epoch; `batch_idx` mirrors that, unlike the run-wide `global_step`);
         the resulting scale is applied to the loss combination every step."""
-        if self.global_step > 0 and self.global_step % self.grad_norm_lite_interval == 0:
+        if batch_idx > 0 and batch_idx % self.grad_norm_lite_interval == 0:
             norms = compute_task_last_layer_grad_norms(
                 self.model.last_backbone_layer_parameters(),
                 losses,
@@ -425,7 +439,7 @@ class MultiTaskModel(LightningModule):
         targets, outputs = self.forward(batch)
         loss, losses = self._compute_loss(targets, outputs, batch)
         if self.grad_norm_lite_enabled:
-            loss = self._apply_grad_norm_lite(losses)
+            loss = self._apply_grad_norm_lite(losses, batch_idx)
         if self.log_task_gradient_norms_enabled:
             self._log_task_gradient_norms(losses)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=False)

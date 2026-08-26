@@ -144,19 +144,24 @@ def build_scene_list(
     return scenes
 
 
+COLOR_NORMALIZATION_MAX_VALUE = 255.0
+
+
 def _build_feature_matrix(
     color: np.ndarray, strength: Optional[np.ndarray], num_points: int
 ) -> Tuple[np.ndarray, List[str]]:
-    """Build x features matching Flair3D+ _flair3d_feature_tensors (RGB 0-255, no /255)."""
+    """Build x features matching myria3d's classic RandLA-Net convention (lidar_hd_pre_transform):
+    color channels scaled to ~[0, 1], not left at raw 0-255 (Pointcept's `color.npy` is 8-bit,
+    hence /255 here vs lidar_hd_pre_transform's /65280 for 16-bit Lidar-HD colors)."""
     if strength is not None:
         intensity = strength.astype(np.float32, copy=False)
     else:
         intensity = np.zeros(num_points, dtype=np.float32)
 
     if color is not None and color.shape[0] == num_points:
-        red = color[:, 0].astype(np.float32, copy=False)
-        green = color[:, 1].astype(np.float32, copy=False)
-        blue = color[:, 2].astype(np.float32, copy=False)
+        red = color[:, 0].astype(np.float32, copy=False) / COLOR_NORMALIZATION_MAX_VALUE
+        green = color[:, 1].astype(np.float32, copy=False) / COLOR_NORMALIZATION_MAX_VALUE
+        blue = color[:, 2].astype(np.float32, copy=False) / COLOR_NORMALIZATION_MAX_VALUE
         rgb_avg = (red + green + blue) / 3.0
     else:
         red = green = blue = rgb_avg = np.zeros(num_points, dtype=np.float32)
@@ -242,13 +247,11 @@ def load_pointcept_scene(scene_dir: str) -> Data:
             values = np.load(asset_path).reshape(-1)
             if data_key == "y_elevation":
                 kwargs[data_key] = torch.from_numpy(values.astype(np.float32, copy=False))
-            elif data_key == "y":
-                remapped = apply_remap(
-                    values.astype(np.int64, copy=False),
-                    get_definition("segment", "default"),
-                )
-                kwargs[data_key] = torch.from_numpy(remapped.astype(np.int64, copy=False))
             else:
+                # segment.npy is written by Pointcept's own preprocessing (already
+                # remapped to train ids via its "v20" LUT, which is a pass-through for
+                # 0-15 with 15=Void) — do not re-apply a myria3d-side segment remap
+                # here, or genuinely-Void points get silently relabeled Building(0).
                 kwargs[data_key] = torch.from_numpy(values.astype(np.int64, copy=False))
         elif data_key == "y_elevation":
             kwargs[data_key] = torch.full(

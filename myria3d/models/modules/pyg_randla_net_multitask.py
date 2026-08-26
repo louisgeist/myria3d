@@ -1,9 +1,10 @@
-from typing import Dict, Mapping
+from typing import Dict, Mapping, Optional
 
 import torch
 from torch import Tensor
 from torch.nn import Linear, ModuleDict
 
+from myria3d.models.modules.pixel_pooling import pool_and_broadcast_by_cell
 from myria3d.models.modules.pyg_randla_net import (
     DilatedResidualBlock,
     FPModule,
@@ -100,11 +101,34 @@ class PyGRandLANetMultiTask(torch.nn.Module):
         fp1_out = self.fp1(*fp2_out, *b1_out)
         return fp1_out[0]
 
-    def forward(self, x, pos, batch, ptr) -> Dict[str, Tensor]:
+    def forward(
+        self,
+        x,
+        pos,
+        batch,
+        ptr,
+        pooled_head_cell_ids: Optional[Mapping[str, Tensor]] = None,
+    ) -> Dict[str, Tensor]:
+        """``pooled_head_cell_ids``: optional ``{task_name: per-point cell_id}``, for
+        tasks whose ``task_config["pool_before_head"]`` is set. For those tasks, the
+        shared backbone feature is pooled to (scene, raster-cell) groups *before* the
+        task head runs (mean/max per `task_config["pooling"]`), then broadcast back to
+        every point in the cell — matching Pointcept's pixel_semantic recipe (pool
+        backbone features, classify once per cell) instead of classifying per-point and
+        pooling logits. All downstream code still sees a per-point tensor: every point in
+        a cell now simply carries an identical, already-cell-level prediction.
+        """
         shared = self._forward_backbone(x, pos, batch, ptr)
+        pooled_head_cell_ids = pooled_head_cell_ids or {}
         outputs: Dict[str, Tensor] = {}
         for task_name, task_config in self.task_configs.items():
-            head_features = self.mlp_heads[task_name](shared)
+            features = shared
+            cell_id = pooled_head_cell_ids.get(task_name)
+            if task_config.get("pool_before_head", False) and cell_id is not None:
+                features = pool_and_broadcast_by_cell(
+                    shared, cell_id, batch, pooling=task_config.get("pooling", "mean")
+                )
+            head_features = self.mlp_heads[task_name](features)
             logits = self.fc_heads[task_name](head_features)
             if self._task_type(task_config) == "regression":
                 outputs[task_name] = logits.squeeze(-1)

@@ -118,7 +118,9 @@ Default entry point: `experiment=flair3d_plus/multitask`. It trains from Pointce
 
 `forest_2d.npy` / `network.npy` are produced by Pointcept's `rasterize_forest.py` / `rasterize_network.py` (run outside myria3d). Roads training is raster CE with foreground weight 5. Graph APLS is scored after test by Pointcept `eval_network_apls.py` on the dumped `{patch_id}_logits_network.npy` rasters (see Monitoring).
 
-Elevation target: `z_lidar - DTM` (meters). Training uses scale `0.01` and `SmoothL1Loss`.
+`forest_2d` sets `pool_before_head: true` in its `task_configs` entry: the shared backbone feature is mean-pooled to raster cells *before* its head runs (then broadcast back per-point), matching Pointcept's pool-then-classify pixel_semantic recipe (`pointcept/models/default.py`) instead of classifying per-point and pooling logits afterward — see `PyGRandLANetMultiTask.forward`. `roads` does not set this flag (kept as classify-then-pool, unchanged).
+
+Elevation target: `z_lidar - DTM` (meters). Training uses `SmoothL1Loss(beta=1.0)` directly in meters — no target rescaling (`elevation_target_scale=1.0`), matching Pointcept's current convention (it dropped the old `×0.01`/`beta=0.01` rescaling, commit `3983eee`).
 
 ### Training from Pointcept `.npy`
 
@@ -136,7 +138,7 @@ Prerequisites:
 - `coord.npy` present (completion marker)
 - Same manifest / exclusions as Pointcept (`missing_coord_tiles.details.csv`, `too_small_tiles.csv`)
 
-Each Pointcept patch is ~100 m on disk; myria3d crops it to 50×50 m subtiles on the fly. Train: one random quadrant per tile per epoch. Val/test: four deterministic quadrants per tile (`subtile_index` 0–3). Downsampling is handled at train time (`SubtileCrop` → `GridSampling` → `MaximumNumNodes`). RGB stays in 0–255 float (Flair3D+ convention, not `/255`). Set `datamodule.tile_width=100` and `datamodule.subtile_width=50` for correct `NormalizePos`.
+Each Pointcept patch is ~100 m on disk; myria3d crops it to 50×50 m subtiles on the fly. Train: one random quadrant per tile per epoch. Val/test: four deterministic quadrants per tile (`subtile_index` 0–3). Downsampling is handled at train time (`SubtileCrop` → `GridSampling` → `MaximumNumNodes`). RGB (`color.npy`, 8-bit) is scaled to `[0, 1]` by `/255` before reaching the model, matching myria3d's classic RandLA-Net color convention (`lidar_hd_pre_transform`'s `/65280` for 16-bit Lidar-HD colors). Set `datamodule.tile_width=100` and `datamodule.subtile_width=50` for correct `NormalizePos`.
 
 Train augmentations (`light_radiometry.yaml`) match Pointcept: XY flips, then `RandomDropColor` / `RandomDropStrength` (20% of scenes drop all RGB or intensity; 50% drop 10% of points). Dropped channels are zeroed as a placeholder; `MultiTaskModel` replaces them with learned fill-in parameters (`color_mask_value`, `strength_mask_value`, logged as `train/learned_mask/*`). Val/test do not drop.
 

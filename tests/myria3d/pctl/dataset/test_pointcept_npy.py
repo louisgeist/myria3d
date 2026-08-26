@@ -51,7 +51,9 @@ def pointcept_manifest_tree(tmp_path):
         },
     ]
     _write_manifest(str(manifest), rows)
-    _write_scene(str(data_root), "train", rows[0]["patch_id"], rows[0]["dept_year"], rows[0]["roi"])
+    _write_scene(
+        str(data_root), "train", rows[0]["patch_id"], rows[0]["dept_year"], rows[0]["roi"]
+    )
     _write_scene(str(data_root), "val", rows[1]["patch_id"], rows[1]["dept_year"], rows[1]["roi"])
     return str(data_root), str(manifest)
 
@@ -89,15 +91,18 @@ def test_pointcept_npy_dataset_sets_patch_id(pointcept_manifest_tree):
     assert data.patch_id == "D067-2021_UU-S1-31_1-1"
 
 
-def test_load_pointcept_scene_merges_buildings_and_maps_void(tmp_path):
+def test_load_pointcept_scene_passes_segment_through_unchanged(tmp_path):
+    """segment.npy is already remapped to train ids by Pointcept's own preprocessing
+    (v20: identity 0-15, 15=Void) — myria3d must not re-remap it a second time, or
+    genuinely-Void points get silently relabeled Building(0)."""
     scene_dir = tmp_path / "scene"
     scene_dir.mkdir()
     np.save(scene_dir / "coord.npy", np.zeros((4, 3), dtype=np.float32))
-    np.save(scene_dir / "segment.npy", np.array([0, 15, 16, -1], dtype=np.int32))
+    np.save(scene_dir / "segment.npy", np.array([0, 7, 15, 3], dtype=np.int32))
 
     data = load_pointcept_scene(str(scene_dir))
 
-    assert torch.equal(data.y, torch.tensor([0, 0, 0, 15]))
+    assert torch.equal(data.y, torch.tensor([0, 7, 15, 3]))
 
 
 def _write_raster_meta(scene_dir, *, origin_x=0.0, origin_y=0.0, pixel_m=1.0):
@@ -197,4 +202,3 @@ def test_load_pointcept_scene_uses_coord_translation_for_raster_cells(tmp_path):
 
     assert torch.equal(data.forest_2d_cell_id, torch.tensor([0]))
     assert torch.equal(data.y_forest_2d, torch.tensor([7]))
-

@@ -54,3 +54,59 @@ def test_task_head_parameters_are_disjoint_across_tasks():
     assert segment_ids.isdisjoint(elevation_ids)
     assert len(segment_ids) > 0
     assert len(elevation_ids) > 0
+
+
+def test_pool_before_head_produces_cell_uniform_outputs_and_leaves_other_tasks_unpooled():
+    """`pool_before_head` pools the backbone feature per (scene, cell) group before the
+    head runs, then broadcasts it back — so every point sharing a cell must get an
+    identical output row for that task, matching Pointcept's pool-then-classify
+    pixel_semantic recipe. Tasks without the flag stay per-point (no such guarantee)."""
+    num_features = 5
+    task_configs = {
+        "segment": {"task_type": "semantic", "num_classes": 6},
+        "forest_2d": {
+            "task_type": "pixel_semantic",
+            "num_classes": 2,
+            "pooling": "mean",
+            "pool_before_head": True,
+        },
+    }
+    model = PyGRandLANetMultiTask(num_features, task_configs, decimation=4, num_neighbors=4)
+    model.eval()
+
+    n_per_graph = 64
+    data = Batch.from_data_list(
+        [
+            Data(
+                x=torch.rand((n_per_graph, num_features)),
+                pos=torch.rand((n_per_graph, 3)),
+                batch=torch.full((n_per_graph,), idx),
+            )
+            for idx in range(2)
+        ]
+    )
+    # Two cells per graph (first/second half of points), out-of-grid points (-1) excluded.
+    cell_id = torch.cat(
+        [
+            torch.zeros(n_per_graph // 2, dtype=torch.long),
+            torch.ones(n_per_graph // 2, dtype=torch.long),
+        ]
+    ).repeat(2)
+
+    with torch.no_grad():
+        outputs = model(
+            data.x, data.pos, data.batch, data.ptr, pooled_head_cell_ids={"forest_2d": cell_id}
+        )
+
+    for graph_idx in range(2):
+        graph_mask = data.batch == graph_idx
+        for cid in (0, 1):
+            group_mask = graph_mask & (cell_id == cid)
+            group_logits = outputs["forest_2d"][group_mask]
+            assert torch.allclose(group_logits, group_logits[0].expand_as(group_logits))
+
+    # segment has no pool_before_head: no such uniformity guarantee (points differ).
+    assert not torch.allclose(
+        outputs["segment"][data.batch == 0],
+        outputs["segment"][data.batch == 0][0].expand(n_per_graph, -1),
+    )

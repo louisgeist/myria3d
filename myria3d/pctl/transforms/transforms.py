@@ -237,7 +237,7 @@ class StandardizeRGBAndIntensity(BaseTransform):
 
 
 class NullifyLowestZ(BaseTransform):
-    """Center on x and y axis only. Set lowest z to 0."""
+    """Set lowest z to 0 (Z-only; XY centering is handled separately, e.g. by `Center`)."""
 
     def __call__(self, data):
         data.pos[:, 2] = data.pos[:, 2] - data.pos[:, 2].min()
