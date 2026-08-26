@@ -14,11 +14,18 @@ Usage:
 """
 
 import argparse
+import sys
 from collections import defaultdict
+from pathlib import Path
 
 import torch
 
-from myria3d.pctl.dataset.pointcept_npy import PointceptNpyDataset
+# Allow running as `python scripts/debug_scene_dtypes.py` from anywhere -- put the repo
+# root (this file's grandparent) on sys.path so `myria3d` is importable without needing
+# PYTHONPATH set or `python -m`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from myria3d.pctl.dataset.pointcept_npy import PointceptNpyDataset  # noqa: E402
 
 
 def main():
