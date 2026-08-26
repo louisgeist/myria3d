@@ -17,7 +17,7 @@ LOGS_DIR="logs/"
 | Mode | Experiment config | Labels source | Model |
 |------|-------------------|---------------|-------|
 | Single-task (segment) | `experiment=flair3d_plus/base_v12` | PLY `semantic` (Flair3D-build) | `PyGRandLANet` |
-| Multitask | `experiment=flair3d_plus/multitask_v12` | PLY + GeoTIFF rasters | `PyGRandLANetMultiTask` |
+| Multitask | `experiment=flair3d_plus/multitask` | Pointcept `.npy` tiles | `PyGRandLANetMultiTask` |
 
 Common pipeline:
 
@@ -103,7 +103,7 @@ sbatch scripts/jz/run_flair3d_plus_train.slurm
 
 ## Multitask
 
-Two recipes share the same RandLA-Net backbone. The **Pointcept `.npy` pipeline** is the current default (`experiment=flair3d_plus/multitask_v12_pointcept*`):
+Default entry point: `experiment=flair3d_plus/multitask`. It trains from Pointcept `.npy` tiles (no HDF5) with GradNorm-lite enabled. The RandLA-Net backbone is shared across eight heads:
 
 | Task | Source | Type | Output dim | `ignore_index` |
 |------|--------|------|------------|----------------|
@@ -118,48 +118,17 @@ Two recipes share the same RandLA-Net backbone. The **Pointcept `.npy` pipeline*
 
 `forest_2d.npy` / `network.npy` are produced by Pointcept's `rasterize_forest.py` / `rasterize_network.py` (run outside myria3d). Roads training is raster CE with foreground weight 5; graph APLS evaluation is a follow-up, not part of this recipe.
 
-The **HDF5 pipeline** (`configs/dataset_description/flair3d_plus_multitask_hdf5.yaml`) keeps `segment` + `elevation` only. There is currently no filled `experiment=flair3d_plus/multitask_v12` entry point for it.
-
 Elevation target: `z_lidar - DTM` (meters). Training uses scale `0.01` and `SmoothL1Loss`.
 
-### Raster layout (HDF5 elevation only)
+### Training from Pointcept `.npy`
 
-GeoTIFFs live under `datamodule.raster_root` (same tree as Pointcept):
-
-```
-{raster_root}/DEM_ELEV/{dept_year}_DEM_ELEV/{roi}/{dept_year}_DEM_ELEV_{roi}_{scene_i_j}.tif
-```
-
-Stem rule: replace `_LIDARHD_` with `_{MODALITY}_` in the PLY filename.
-
-Raster sampling runs **once per patch** (before subtiling). Any change to preprocessing or remaps requires **recreating the HDF5**.
-
-### Commands (Hecate example)
+Tiles must already be preprocessed by [Pointcept](https://github.com/Pointcept/Pointcept) (folders under `train/`, `val/`, `test/` with `coord.npy`, `color.npy`, `strength.npy`, multitask label arrays):
 
 ```bash
-python run.py experiment=flair3d_plus/multitask_v12 \
-  datamodule.split_csv_path=/data/geist/myria3d/tests/data/flair3d_plus_split_D067.csv \
-  datamodule.hdf5_file_path=/data/geist/myria3d/tests/data/flair3d_plus_multitask_v12_D067.hdf5 \
-  datamodule.raster_root=/data/geist/Pointcept/data/flair3d_plus/raw \
-  task.task_name=create_hdf5
-
-python run.py experiment=flair3d_plus/multitask_v12 \
-  datamodule.split_csv_path=/data/geist/myria3d/tests/data/flair3d_plus_split_D067.csv \
-  datamodule.hdf5_file_path=/data/geist/myria3d/tests/data/flair3d_plus_multitask_v12_D067.hdf5 \
-  datamodule.raster_root=/data/geist/Pointcept/data/flair3d_plus/raw
+python run.py experiment=flair3d_plus/multitask
 ```
 
-Jean Zay: same overrides as single-task, but use `experiment=flair3d_plus/multitask_v12`, a distinct `HDF5_PATH`, and set `RASTER_ROOT` to the Pointcept raw directory on lustre.
-
-### Training from Pointcept `.npy` (shortcut)
-
-If Flair3D+ tiles are already preprocessed by [Pointcept](https://github.com/Pointcept/Pointcept) (folders under `train/`, `val/`, `test/` with `coord.npy`, `color.npy`, `strength.npy`, multitask label arrays), you can train **without** `create_hdf5`:
-
-```bash
-python run.py experiment=flair3d_plus/multitask_v12_pointcept \
-  datamodule.data_root=/data/geist/Pointcept/data/flair3d_plus \
-  datamodule.csv_manifest=/data/geist/Pointcept/data/flair3d_plus/raw/scene_split_manifest_D067.csv
-```
+Hecate defaults in the experiment YAML: `data_root=/data/geist/Pointcept/data/flair3d_plus` and the D067 manifest. Jean Zay overrides `data_root` / `csv_manifest` (see `scripts/jz/launch_h100.sh`).
 
 Prerequisites:
 
@@ -167,7 +136,9 @@ Prerequisites:
 - `coord.npy` present (completion marker)
 - Same manifest / exclusions as Pointcept (`missing_coord_tiles.details.csv`, `too_small_tiles.csv`)
 
-Each Pointcept patch is ~100 m on disk; myria3d crops it to 50×50 m subtiles on the fly (same mosaic as the HDF5 pipeline). Train: one random quadrant per tile per epoch. Val/test: four deterministic quadrants per tile (`subtile_index` 0–3). Downsampling is handled at train time (`SubtileCrop` → `GridSampling` → `MaximumNumNodes`). RGB stays in 0–255 float (Flair3D+ convention, not `/255`). Set `datamodule.tile_width=100` and `datamodule.subtile_width=50` for correct `NormalizePos`.
+Each Pointcept patch is ~100 m on disk; myria3d crops it to 50×50 m subtiles on the fly. Train: one random quadrant per tile per epoch. Val/test: four deterministic quadrants per tile (`subtile_index` 0–3). Downsampling is handled at train time (`SubtileCrop` → `GridSampling` → `MaximumNumNodes`). RGB stays in 0–255 float (Flair3D+ convention, not `/255`). Set `datamodule.tile_width=100` and `datamodule.subtile_width=50` for correct `NormalizePos`.
+
+Train augmentations (`light_radiometry.yaml`) match Pointcept: XY flips, then `RandomDropColor` / `RandomDropStrength` (20% of scenes drop all RGB or intensity; 50% drop 10% of points). Dropped channels are zeroed as a placeholder; `MultiTaskModel` replaces them with learned fill-in parameters (`color_mask_value`, `strength_mask_value`, logged as `train/learned_mask/*`). Val/test do not drop.
 
 **Perf note:** val/test reload the full `.npy` scene once per quadrant (4× I/O per tile). Usually negligible vs GPU forward (OS page cache helps: quadrants are consecutive, no val shuffle). If val I/O becomes a bottleneck, add a per-scene in-memory cache in `PointceptNpyDataset`.
 
@@ -179,7 +150,7 @@ model.interpolate_at_val=false
 
 #### Iter-limited training schedule (Pointcept-compatible)
 
-The Flair3D+ train set is very large. By default, `multitask_v12_pointcept` uses **iter-limited** mode (same semantics as Pointcept): one training epoch is a fixed number of optimizer steps, not a full dataset pass.
+The Flair3D+ train set is very large. By default, `multitask` uses **iter-limited** mode (same semantics as Pointcept): one training epoch is a fixed number of optimizer steps, not a full dataset pass.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
@@ -192,10 +163,8 @@ Derived values: `num_epochs = total_iters // iter_per_epoch` (exact division req
 Override from CLI:
 
 ```bash
-python run.py experiment=flair3d_plus/multitask_v12_pointcept \
-  total_iters=10000 iter_per_epoch=1000 eval_every=5 \
-  datamodule.data_root=/data/geist/Pointcept/data/flair3d_plus \
-  datamodule.csv_manifest=/data/geist/Pointcept/data/flair3d_plus/raw/scene_split_manifest_D067.csv
+python run.py experiment=flair3d_plus/multitask \
+  total_iters=10000 iter_per_epoch=1000 eval_every=5
 ```
 
 To use classic epoch-based training instead, set `total_iters=null` and configure `trainer.max_epochs` explicitly.
@@ -206,14 +175,13 @@ To use classic epoch-based training instead, set `total_iters=null` and configur
 
 | File | Role |
 |------|------|
-| `configs/experiment/flair3d_plus/multitask_v12.yaml` | Experiment entry point (HDF5 pipeline) |
-| `configs/experiment/flair3d_plus/multitask_v12_pointcept.yaml` | Multitask from Pointcept `.npy` tiles (iter-limited by default) |
+| `configs/experiment/flair3d_plus/multitask.yaml` | Default multitask experiment (Pointcept `.npy`, GradNorm-lite) |
 | `configs/training_schedule/default.yaml` | `total_iters`, `iter_per_epoch`, `eval_every` defaults |
 | `configs/datamodule/pointcept_npy_datamodule.yaml` | Datamodule for Pointcept preprocessed data |
-| `configs/dataset_description/flair3d_plus_multitask.yaml` | Pointcept-npy task dims, weights, elevation scale |
-| `configs/dataset_description/flair3d_plus_multitask_hdf5.yaml` | HDF5 pipeline: segment + elevation only |
+| `configs/dataset_description/flair3d_plus_multitask.yaml` | Task dims, weights, elevation scale |
 | `configs/model/pyg_randla_net_multitask_model.yaml` | `PyGRandLANetMultiTask` hparams |
-| `configs/model/multitask_default.yaml` | GradNorm-lite + task-weight defaults |
+| `configs/model/multitask_default.yaml` | GradNorm-lite, learned RGB/intensity fill-in, task-weight defaults |
+| `configs/datamodule/transforms/augmentations/light_radiometry.yaml` | XY flips + RandomDropColor / RandomDropStrength |
 | `configs/callbacks/multitask.yaml` | Per-task metrics, early stopping on `val/iou` (segment) |
 
 ### Code map
@@ -245,11 +213,21 @@ mamba env update -f environment.yml
 
 ### Monitoring
 
-- Main metric: `val/iou` on **segment**
-- Pixel-semantic: `val/iou_forest_2d`, `val/iou_roads`
-- Nathab axes: `val/kl_nathab_habitat_type`, `val/kl_nathab_moisture_regime`, `val/kl_nathab_soil_chemistry`, `val/kl_nathab_bioclimatic_zone`
-- Regression: `val/elevation_mae`, `val/elevation_rmse`
-- Per-task losses: `train/loss_segment`, `train/loss_forest_2d`, `train/loss_roads`, `train/loss_nathab_*`, …
+Logged every epoch (`train/` / `val/` / `test/`). `val/iou` (segment mIoU) remains the checkpoint / early-stopping key.
+
+| Task | Headline | Also logged |
+|------|----------|-------------|
+| `segment` | `{split}/segment/mIoU` | `{split}/segment/iou/{class}` (val/test), alias `{split}/iou` |
+| `forest_2d`, `roads` | `{split}/{task}/mIoU` | cell-pooled IoU; `{split}/{task}/iou/{class}` (val/test) |
+| `elevation` | `{split}/reg/elevation/mae` | RMSE; values in **meters** |
+| `nathab_*` | `{split}/tv/{task}` | weighted KL; per-class frequency MAE `{split}/mae/{task}/{class}` |
+| all 4 nathab axes | `{split}/tv/nathab_total` | **unweighted sum** of the 4 axis TVs (Pointcept) |
+
+Nathab TV: pool each tile to distributions `(pi_hat, q_t)`, accumulate `n_t · |pi_hat - q_t|` over tiles, then `TV = sum_c (abs_weighted_c / sum n_t)`. That is the point-count-weighted mean of per-tile L1. `nathab_total` then **adds the four axis TVs** (no extra weighting).
+
+Graph **APLS** is not logged here (needs dense raster export + ROI stitching; Pointcept `NetworkAPLSEvaluator`). Roads monitoring is raster mIoU / per-class IoU only.
+
+Per-task losses: `train/loss_segment`, `train/loss_forest_2d`, `train/loss_roads`, `train/loss_nathab_*`, …
 
 ### Loss balancing (GradNorm-lite)
 
@@ -264,10 +242,10 @@ summing with the static `task_weights`:
 train/loss = Σ_t  loss_t · task_weights[t] · (1 / max(EMA_t, grad_norm_lite_eps))
 ```
 
-Config (`configs/model/multitask_default.yaml`): `grad_norm_lite` (off by default),
-`grad_norm_lite_interval` (default 100), `grad_norm_lite_ema_alpha` (EMA smoothing, default 0.1),
-`grad_norm_lite_eps` (default 1e-3), `grad_norm_lite_task_groups` (the 4 nathab axes share one
-`nathab` group, matching Pointcept). Enabled in `configs/experiment/flair3d_plus/multitask_v12_pointcept_jz.yaml`.
+Config (`configs/model/multitask_default.yaml`): `grad_norm_lite` (off by default; the
+`flair3d_plus/multitask` experiment turns it on), `grad_norm_lite_interval` (default 100),
+`grad_norm_lite_ema_alpha` (EMA smoothing, default 0.1), `grad_norm_lite_eps` (default 1e-3),
+`grad_norm_lite_task_groups` (the 4 nathab axes share one `nathab` group, matching Pointcept).
 
 Logged keys: `train/grad_norm_lite_scale_{task}` (every step), `train/grad_norm_lite_norm_{task}`
 (only on measurement steps). A separate, diagnostic-only toggle `log_task_gradient_norms` (off by

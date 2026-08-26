@@ -1,0 +1,28 @@
+# XY flips plus Pointcept radiometry dropout (train only; after StandardizeRGBAndIntensity).
+defaults:
+  - light.yaml
+
+# 20% of scenes: drop all RGB; 50% of scenes: drop 10% of points. Masks OR together.
+RandomDropColorScene:
+  _target_: myria3d.pctl.transforms.transforms.RandomDropColor
+  drop_ratio: 1.0
+  drop_application_ratio: 0.2
+  keep_mask: true
+
+RandomDropColorPoints:
+  _target_: myria3d.pctl.transforms.transforms.RandomDropColor
+  drop_ratio: 0.1
+  drop_application_ratio: 0.5
+  keep_mask: true
+
+RandomDropStrengthScene:
+  _target_: myria3d.pctl.transforms.transforms.RandomDropStrength
+  drop_ratio: 1.0
+  drop_application_ratio: 0.2
+  keep_mask: true
+
+RandomDropStrengthPoints:
+  _target_: myria3d.pctl.transforms.transforms.RandomDropStrength
+  drop_ratio: 0.1
+  drop_application_ratio: 0.5
+  keep_mask: true

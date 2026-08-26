@@ -38,6 +38,10 @@ grad_norm_lite_task_groups:
 # Diagnostic-only per-task gradient norm / cosine-similarity logging (no effect on training).
 log_task_gradient_norms: false
 
+# Learned RGB / intensity fill-in for RandomDropColor / RandomDropStrength (Pointcept).
+learned_masked_feat: true
+learned_masked_feat_keys: [color, strength]
+
 criteria:
   segment:
     _target_: torch.nn.CrossEntropyLoss

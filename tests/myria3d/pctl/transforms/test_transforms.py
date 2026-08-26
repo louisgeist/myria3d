@@ -6,6 +6,8 @@ import torch_geometric
 from myria3d.pctl.transforms.transforms import (
     DropPointsByClass,
     MinimumNumNodes,
+    RandomDropColor,
+    RandomDropStrength,
     SubtileCrop,
     TargetTransform,
     subsample_data,
@@ -223,3 +225,48 @@ def test_MinimumNumNodes(input_nodes, min_nodes):
     # Check that "idx_in_original_cloud" key is not modified
     assert isinstance(transformed_data.idx_in_original_cloud, np.ndarray)
     assert transformed_data.idx_in_original_cloud.shape[0] == input_nodes
+
+
+FEATURE_NAMES = ["Intensity", "Red", "Green", "Blue", "rgb_avg"]
+
+
+def _radiometry_data(num_points: int = 20) -> torch_geometric.data.Data:
+    return torch_geometric.data.Data(
+        x=torch.arange(num_points * 5, dtype=torch.float32).reshape(num_points, 5) + 1.0,
+        x_features_names=FEATURE_NAMES,
+        num_nodes=num_points,
+    )
+
+
+def test_RandomDropColor_drops_all_rgb_channels_and_stores_mask():
+    torch.manual_seed(0)
+    data = _radiometry_data(10)
+    original_intensity = data.x[:, 0].clone()
+    dropped = RandomDropColor(
+        drop_ratio=1.0, drop_application_ratio=1.0, keep_mask=True
+    )(data)
+    assert torch.equal(dropped.x[:, 0], original_intensity)
+    assert torch.all(dropped.x[:, 1:] == 0)
+    assert torch.all(dropped.color_mask)
+
+
+def test_RandomDropStrength_drops_intensity_only():
+    torch.manual_seed(0)
+    data = _radiometry_data(10)
+    original_color = data.x[:, 1:].clone()
+    dropped = RandomDropStrength(
+        drop_ratio=1.0, drop_application_ratio=1.0, keep_mask=True
+    )(data)
+    assert torch.all(dropped.x[:, 0] == 0)
+    assert torch.equal(dropped.x[:, 1:], original_color)
+    assert torch.all(dropped.strength_mask)
+
+
+def test_RandomDropColor_stacked_calls_or_the_mask():
+    torch.manual_seed(0)
+    data = _radiometry_data(20)
+    first = RandomDropColor(drop_ratio=0.5, drop_application_ratio=1.0, keep_mask=True)
+    second = RandomDropColor(drop_ratio=0.5, drop_application_ratio=1.0, keep_mask=True)
+    dropped = second(first(data))
+    assert int(dropped.color_mask.sum()) >= 10
+    assert torch.all(dropped.x[dropped.color_mask, 1:] == 0)

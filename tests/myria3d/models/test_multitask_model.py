@@ -266,3 +266,40 @@ def test_pixel_semantic_and_tile_distribution_training_step_smoke():
     assert torch.isfinite(out["loss"])
     assert set(out["outputs"]) == set(task_configs)
 
+
+def test_learned_masked_feat_fill_and_gradient():
+    model = _make_model(learned_masked_feat=True, learned_masked_feat_keys=("color", "strength"))
+    model.train()
+    with torch.no_grad():
+        model.color_mask_value.fill_(3.0)
+        model.strength_mask_value.fill_(7.0)
+
+    n = 32
+    x = torch.arange(n * NUM_FEATURES, dtype=torch.float32).reshape(n, NUM_FEATURES) + 1.0
+    color_mask = torch.tensor([True, False] * (n // 2))
+    strength_mask = torch.tensor([False, True] * (n // 2))
+    batch = Batch.from_data_list(
+        [
+            Data(
+                x=x.clone(),
+                pos=torch.rand(n, 3),
+                y=torch.zeros(n, dtype=torch.long),
+                y_elevation=torch.rand(n),
+                color_mask=color_mask,
+                strength_mask=strength_mask,
+                x_features_names=["Intensity", "Red", "Green", "Blue", "rgb_avg"],
+            )
+        ]
+    )
+    filled = model._fill_masked_features(batch)
+    assert torch.allclose(filled[color_mask, 1:], torch.full((n // 2, 4), 3.0))
+    assert torch.equal(filled[~color_mask, 1:], x[~color_mask, 1:])
+    assert torch.allclose(filled[strength_mask, 0], torch.full((n // 2,), 7.0))
+    assert torch.equal(filled[~strength_mask, 0], x[~strength_mask, 0])
+
+    filled.sum().backward()
+    assert model.color_mask_value.grad is not None
+    assert model.strength_mask_value.grad is not None
+    assert torch.isfinite(model.color_mask_value.grad).all()
+    assert torch.isfinite(model.strength_mask_value.grad).all()
+

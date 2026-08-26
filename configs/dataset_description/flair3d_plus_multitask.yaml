@@ -43,12 +43,14 @@ task_configs:
     num_classes: 2
     ignore_index: 2
     pooling: mean
+    names: ["Not Forest", "Forest"]
   roads:
     task_type: pixel_semantic
     # Label ids 0=Background, 1=Road; void (out of raster grid) is masked via ignore_index.
     num_classes: 2
     ignore_index: 2
     pooling: max
+    names: ["Background", "Road"]
   nathab_habitat_type:
     task_type: tile_distribution
     num_classes: 4

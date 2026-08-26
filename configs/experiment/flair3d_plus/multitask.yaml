@@ -1,0 +1,54 @@
+# @package _global_
+# Flair3D+ multitask from Pointcept-preprocessed .npy tiles (no HDF5 create step).
+
+max_num_nodes: 40000
+
+defaults:
+  - override /datamodule: pointcept_npy_datamodule.yaml
+  - override /model: pyg_randla_net_multitask_model.yaml
+  - override /callbacks: multitask.yaml
+  - override /datamodule/transforms/augmentations: light_radiometry.yaml
+  - override /logger: wandb.yaml
+  - override /dataset_description: flair3d_plus_multitask.yaml
+  - override /datamodule/transforms/preparations: points_budget_flair3d_plus_multitask.yaml
+  - override /datamodule/transforms/normalizations: multitask.yaml
+
+model:
+  lr: 1e-3
+  monitor: "val/iou"
+  grad_norm_lite: true
+
+logger:
+  wandb:
+    name: >
+      RandLaNet | Flair3D+ multitask Pointcept npy | voxel=${datamodule.transforms.preparations.voxel}
+
+total_iters: 10_000
+iter_per_epoch: 1000
+eval_every: 5
+
+trainer:
+  num_sanity_val_steps: 2
+  accelerator: gpu
+
+datamodule:
+  batch_size: 12
+  num_workers: 4
+  data_root: /data/geist/Pointcept/data/flair3d_plus
+  csv_manifest: ${datamodule.data_root}/raw/scene_split_manifest_D067.csv
+  tile_width: 100
+  subtile_width: 50
+  transforms:
+    preparations:
+      train:
+        MaximumNumNodes:
+          _args_:
+            - ${max_num_nodes}
+      eval:
+        MaximumNumNodes:
+          _args_:
+            - ${max_num_nodes}
+      predict:
+        MaximumNumNodes:
+          _args_:
+            - ${max_num_nodes}

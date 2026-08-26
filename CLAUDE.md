@@ -165,7 +165,7 @@ it before changing anything schedule- or callback-related for the Pointcept pipe
   tiles already preprocessed by an external [Pointcept](https://github.com/Pointcept/Pointcept)
   pipeline (`coord.npy`/`color.npy`/... + multitask label arrays) and crops 50m subtiles from
   100m tiles on the fly instead of relying on a pre-built HDF5. Used by
-  `experiment=flair3d_plus/multitask_v12_pointcept*`.
+  `experiment=flair3d_plus/multitask`.
 - `dataset/flair3d.py`, `flair3d_label_remap.py`, `raster_utils.py` — Flair3D+-specific PLY
   label handling and GeoTIFF raster sampling (once per patch, before subtiling — changing this
   logic requires regenerating the HDF5 cache).

@@ -60,7 +60,9 @@ export PYTHONPATH="${POINTOPS_PATH}${PYTHONPATH:+:$PYTHONPATH}"
 
 
 ### --- Myria3D syntax ---
-python run.py experiment=flair3d_plus/multitask_v12_pointcept_jz
+python run.py experiment=flair3d_plus/multitask \
+  datamodule.data_root=/lustre/fsn1/projects/rech/unv/usi32yh/data_pointcept/flair3d_plus \
+  datamodule.csv_manifest=/lustre/fsn1/projects/rech/unv/usi32yh/data_pointcept/flair3d_plus/raw/scene_split_manifest.csv
 
 ### ------------------------
 
