@@ -62,6 +62,11 @@ def resolve_training_schedule(config: DictConfig) -> None:
         if config.get("seed") is not None and config.datamodule.get("seed") is None:
             config.datamodule.seed = config.seed
 
+    # ReduceLROnPlateau steps at epoch end; align with validation frequency so
+    # val/iou exists when the scheduler runs (sanity-check metrics are cleared).
+    if "model" in config:
+        config.model.lr_scheduler_frequency = eval_every
+
     log.info(
         "Iter-limited training enabled: total_iters=%d optimizer steps, "
         "iter_per_epoch=%d, num_epochs=%d, eval_every=%d. "

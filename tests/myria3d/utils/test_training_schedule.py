@@ -23,6 +23,7 @@ def test_resolve_training_schedule_derives_pl_params():
             "total_iters": 10000,
             "trainer": {},
             "datamodule": {},
+            "model": {},
         }
     )
     resolve_training_schedule(config)
@@ -34,6 +35,7 @@ def test_resolve_training_schedule_derives_pl_params():
     assert config.trainer.limit_train_batches == 1000
     assert config.trainer.check_val_every_n_epoch == 5
     assert config.datamodule.iter_per_epoch == 1000
+    assert config.model.lr_scheduler_frequency == 5
 
 
 def test_resolve_training_schedule_custom_params():
@@ -44,6 +46,7 @@ def test_resolve_training_schedule_custom_params():
             "eval_every": 3,
             "trainer": {},
             "datamodule": {},
+            "model": {},
         }
     )
     resolve_training_schedule(config)
@@ -51,6 +54,7 @@ def test_resolve_training_schedule_custom_params():
     assert config.trainer.max_epochs == 3
     assert config.trainer.limit_train_batches == 5
     assert config.trainer.check_val_every_n_epoch == 3
+    assert config.model.lr_scheduler_frequency == 3
 
 
 def test_resolve_training_schedule_rejects_non_divisible():
