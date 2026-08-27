@@ -84,7 +84,7 @@ class SubtileCrop(BaseTransform):
         self.subtile_width = subtile_width
         self.subtile_overlap = subtile_overlap
         self.random = random
-        # Drop crops with fewer than this many points (default 1 == only reject empty).
+        # Skip a crop with fewer than this many points (default 1 == only reject empty).
         # A near-empty quadrant of an otherwise-fine tile is a useless training sample and,
         # once GridSampling collapses it toward num_nodes==1, breaks batch collate.
         self.min_points = min_points
@@ -97,26 +97,33 @@ class SubtileCrop(BaseTransform):
             raise ValueError("SubtileCrop requires at least one subtile.")
 
         subtile_index = getattr(data, "subtile_index", None)
-        if subtile_index is None:
-            if not self.random:
-                raise ValueError(
-                    "SubtileCrop requires data.subtile_index or random=True."
-                )
-            subtile_index = random.randint(0, num_subtiles - 1)
+        if subtile_index is not None:
+            # Fixed index (val/test): that quadrant only -- None if it is (near-)empty.
+            candidate_indices = [int(subtile_index)]
+        elif self.random:
+            # Try quadrants in random order and take the first with enough points, so a
+            # tile whose points sit in only 1-2 quadrants still yields a usable sample
+            # instead of a wasted None. Uniform over the quadrants that pass min_points.
+            candidate_indices = random.sample(range(num_subtiles), num_subtiles)
         else:
-            subtile_index = int(subtile_index)
+            raise ValueError("SubtileCrop requires data.subtile_index or random=True.")
 
         if hasattr(data, "subtile_index"):
             del data.subtile_index
 
-        choice = get_subtile_choice(
-            data.pos,
-            self.tile_width,
-            self.subtile_width,
-            subtile_index,
-            subtile_overlap=self.subtile_overlap,
-        )
-        if int(choice.sum()) < self.min_points:
+        choice = None
+        for idx in candidate_indices:
+            candidate = get_subtile_choice(
+                data.pos,
+                self.tile_width,
+                self.subtile_width,
+                idx,
+                subtile_overlap=self.subtile_overlap,
+            )
+            if int(candidate.sum()) >= self.min_points:
+                choice = candidate
+                break
+        if choice is None:
             return None
 
         num_nodes = data.num_nodes
