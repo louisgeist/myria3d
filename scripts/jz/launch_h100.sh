@@ -19,6 +19,14 @@
 JOB_DIR=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs/slurm/${SLURM_JOB_ID}
 mkdir -p ${JOB_DIR}
 
+# --output/--error above must stay flat in logs/slurm/ (that directory is
+# guaranteed to exist at submission time; a %j subdirectory might not be,
+# and SLURM will silently fail to create the file if its parent dir is
+# missing). Symlink them into JOB_DIR instead so everything for this job
+# is browsable from one place.
+ln -sf ../${SLURM_JOB_ID}.out ${JOB_DIR}/${SLURM_JOB_ID}.out
+ln -sf ../${SLURM_JOB_ID}.err ${JOB_DIR}/${SLURM_JOB_ID}.err
+
 cp $0 ${JOB_DIR}/script.slurm
 
 {
