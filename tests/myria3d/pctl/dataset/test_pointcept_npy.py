@@ -145,12 +145,10 @@ def test_load_pointcept_scene_pixel_semantic_and_nathab_axes(tmp_path):
 
     assert torch.equal(data.y_forest_2d, torch.tensor([0, 1, 2, 1]))
     assert torch.equal(data.forest_2d_cell_id, torch.tensor([0, 1, 2, 3]))
-    assert torch.equal(data.forest_2d_raster_h, torch.tensor([2]))
-    assert torch.equal(data.forest_2d_raster_w, torch.tensor([2]))
+    assert (data.forest_2d_raster_h, data.forest_2d_raster_w) == (2, 2)
     assert torch.equal(data.y_roads, torch.tensor([0, 1, 0, 0]))
     assert torch.equal(data.roads_cell_id, torch.tensor([0, 1, 2, 3]))
-    assert torch.equal(data.roads_raster_h, torch.tensor([2]))
-    assert torch.equal(data.roads_raster_w, torch.tensor([2]))
+    assert (data.roads_raster_h, data.roads_raster_w) == (2, 2)
     # Axis 0 (open / humid / acid / temperate) vs void on every axis.
     assert torch.equal(data.y_nathab_habitat_type, torch.tensor([0, 0, 4, 4]))
     assert torch.equal(data.y_nathab_moisture_regime, torch.tensor([0, 0, 3, 3]))
@@ -167,12 +165,10 @@ def test_load_pointcept_scene_missing_raster_and_nathab_fallback(tmp_path):
 
     assert torch.equal(data.forest_2d_cell_id, torch.tensor([-1, -1, -1]))
     assert torch.equal(data.y_forest_2d, torch.tensor([2, 2, 2]))
-    assert torch.equal(data.forest_2d_raster_h, torch.tensor([0]))
-    assert torch.equal(data.forest_2d_raster_w, torch.tensor([0]))
+    assert (data.forest_2d_raster_h, data.forest_2d_raster_w) == (0, 0)
     assert torch.equal(data.roads_cell_id, torch.tensor([-1, -1, -1]))
     assert torch.equal(data.y_roads, torch.tensor([2, 2, 2]))
-    assert torch.equal(data.roads_raster_h, torch.tensor([0]))
-    assert torch.equal(data.roads_raster_w, torch.tensor([0]))
+    assert (data.roads_raster_h, data.roads_raster_w) == (0, 0)
     # Missing natural_habitat.npy is filled with raw id 43 (void on every axis).
     assert torch.equal(data.y_nathab_habitat_type, torch.tensor([4, 4, 4]))
     assert torch.equal(data.y_nathab_moisture_regime, torch.tensor([3, 3, 3]))
@@ -202,3 +198,28 @@ def test_load_pointcept_scene_uses_coord_translation_for_raster_cells(tmp_path):
 
     assert torch.equal(data.forest_2d_cell_id, torch.tensor([0]))
     assert torch.equal(data.y_forest_2d, torch.tensor([7]))
+
+
+def test_degenerate_gridsampled_scene_still_batches_with_a_normal_scene(tmp_path):
+    """Regression: a subtile crop that leaves num_nodes == 1 used to make GridSampling
+    mean-reduce (float-cast) the (1,) raster-hw tensors, so batching that scene with a
+    normal one blew up with "torch.cat(): input types can't be cast to Long"."""
+    from torch_geometric.data import Batch
+    from torch_geometric.transforms import GridSampling
+
+    small = tmp_path / "small"
+    small.mkdir()
+    np.save(small / "coord.npy", np.zeros((1, 3), dtype=np.float32))
+    big = tmp_path / "big"
+    big.mkdir()
+    np.save(big / "coord.npy", np.random.rand(64, 3).astype(np.float32))
+
+    grid = GridSampling(0.1)
+    a = grid(load_pointcept_scene(str(small)))  # collapses to a single node
+    b = grid(load_pointcept_scene(str(big)))
+    assert a.num_nodes == 1
+
+    batch = Batch.from_data_list([a, b])
+    for key in ("forest_2d_raster_h", "roads_raster_w"):
+        assert batch[key].dtype == torch.long
+        assert batch[key].numel() == 2

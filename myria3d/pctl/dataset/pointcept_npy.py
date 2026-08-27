@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import os.path as osp
 from numbers import Number
 from typing import Callable, List, Optional, Sequence, Set, Tuple
@@ -304,9 +303,13 @@ def load_pointcept_scene(scene_dir: str) -> Data:
             raster_h, raster_w = 0, 0
         kwargs[f"{task_name}_cell_id"] = torch.from_numpy(cell_id)
         kwargs[f"y_{task_name}"] = torch.from_numpy(label)
-        # Graph-level (1,) so GridSampling / subsample_data leave them alone.
-        kwargs[f"{task_name}_raster_h"] = torch.tensor([raster_h], dtype=torch.long)
-        kwargs[f"{task_name}_raster_w"] = torch.tensor([raster_w], dtype=torch.long)
+        # Graph-level scalars kept as plain python ints, NOT (1,) tensors: GridSampling /
+        # subsample_data only mutate tensors, and a (1,) tensor is still mean-reduced (and
+        # float-cast) when a degenerate subtile crop leaves num_nodes == 1 -- which then
+        # breaks Batch collate ("torch.cat can't cast to Long"). PyG collate stacks the
+        # ints to a (batch,) tensor, which is what the metric / dump callbacks read.
+        kwargs[f"{task_name}_raster_h"] = int(raster_h)
+        kwargs[f"{task_name}_raster_w"] = int(raster_w)
 
     # natural_habitat.npy stores raw (near-raw) CarHab ids; remapped here into 4
     # low-cardinality ecological axes (tile_distribution targets), never used directly.
