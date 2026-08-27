@@ -3,7 +3,10 @@ _target_: myria3d.pctl.datamodule.pointcept_npy.PointceptNpyDatamodule
 data_root: /data/geist/Pointcept/data/flair3d_plus
 csv_manifest: ${datamodule.data_root}/raw/scene_split_manifest_D067.csv
 excluded_tiles_details_csv: ${datamodule.data_root}/missing_coord_tiles.details.csv
-too_small_tiles_manifest: ${datamodule.data_root}/too_small_tiles.csv
+# No too_small_tiles_manifest: a tile-level "< 1000 points" filter is the wrong
+# granularity now that training crops one random 50 m quadrant per tile. Near-empty
+# quadrants are dropped per-crop instead (SubtileCrop.min_points, see transforms/
+# preparations/points_budget_flair3d_plus_multitask.yaml).
 
 tile_width: 100
 subtile_width: 50

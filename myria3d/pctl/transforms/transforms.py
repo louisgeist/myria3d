@@ -78,11 +78,16 @@ class SubtileCrop(BaseTransform):
         subtile_width: float = 50,
         subtile_overlap: float = 0,
         random: bool = False,
+        min_points: int = 1,
     ):
         self.tile_width = tile_width
         self.subtile_width = subtile_width
         self.subtile_overlap = subtile_overlap
         self.random = random
+        # Drop crops with fewer than this many points (default 1 == only reject empty).
+        # A near-empty quadrant of an otherwise-fine tile is a useless training sample and,
+        # once GridSampling collapses it toward num_nodes==1, breaks batch collate.
+        self.min_points = min_points
 
     def __call__(self, data: Data):
         num_subtiles = get_num_subtiles(
@@ -111,7 +116,7 @@ class SubtileCrop(BaseTransform):
             subtile_index,
             subtile_overlap=self.subtile_overlap,
         )
-        if not choice.any():
+        if int(choice.sum()) < self.min_points:
             return None
 
         num_nodes = data.num_nodes
@@ -126,7 +131,8 @@ class SubtileCrop(BaseTransform):
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}(tile_width={self.tile_width}, "
-            f"subtile_width={self.subtile_width}, random={self.random})"
+            f"subtile_width={self.subtile_width}, random={self.random}, "
+            f"min_points={self.min_points})"
         )
 
 

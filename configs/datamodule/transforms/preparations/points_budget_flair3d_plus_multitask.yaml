@@ -8,6 +8,10 @@ train:
     tile_width: "${datamodule.tile_width}"
     subtile_width: "${datamodule.subtile_width}"
     random: true
+    # Skip a randomly-drawn 50 m quadrant that is (near-)empty even though its 100 m tile
+    # is fine -- coastline / swath-edge tiles. Below 300 GridSampling + MinimumNumNodes
+    # only duplicate points into a junk sample. Replaces the tile-level too_small filter.
+    min_points: 300
 
   DropPointsByClass:
     _target_: myria3d.pctl.transforms.transforms.DropPointsByClass

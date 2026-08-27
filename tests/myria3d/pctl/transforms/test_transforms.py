@@ -135,6 +135,20 @@ def test_SubtileCrop_random():
     assert cropped.num_nodes < data.num_nodes
 
 
+def test_SubtileCrop_returns_none_below_min_points():
+    # A tile whose points all sit in quadrant 0 -> quadrant 3 crop is (near-)empty.
+    pos = torch.tensor(
+        [[1.0, 1.0, 0.0], [2.0, 2.0, 0.0], [3.0, 3.0, 0.0]], dtype=torch.float32
+    )
+    data = torch_geometric.data.Data(pos=pos, x=torch.rand(3, 3), idx_in_original_cloud=np.arange(3))
+    data.subtile_index = 3  # far quadrant, no points there
+    assert SubtileCrop(tile_width=100, subtile_width=50, min_points=1)(data.clone()) is None
+
+    data.subtile_index = 0  # 3 points land here
+    assert SubtileCrop(tile_width=100, subtile_width=50, min_points=1)(data.clone()) is not None
+    assert SubtileCrop(tile_width=100, subtile_width=50, min_points=10)(data.clone()) is None
+
+
 def test_SubtileCrop_uses_data_subtile_index():
     data = _synthetic_tile_data()
     crop = SubtileCrop(tile_width=100, subtile_width=50, random=False)
