@@ -13,13 +13,36 @@
 
 #SBATCH --job-name=myria3d-200k
 #SBATCH --time=19:45:00
+#SBATCH --signal=USR1@120
+#SBATCH --requeue
 # 200k iterations is ~20x the reference 10k run this --time budget comes from
-# (scripts/jz/launch_h100.sh) -- it will very likely need several resubmissions.
-# Adjust --time to your actual throughput/QOS. To resume past the time limit,
-# resubmit the same command with `model.ckpt_path=<run_dir>/checkpoints/last.ckpt`
-# appended below (save_last: true is on by default, see configs/callbacks/multitask.yaml,
-# and this goes through the real Lightning resume path -- optimizer/scheduler/epoch state
-# included -- not `task.task_name=finetune`, which restarts the schedule from epoch 0).
+# (scripts/jz/launch_h100.sh) -- it will very likely need several requeues.
+# Adjust --time to your actual throughput/QOS.
+#
+# Auto-requeue: `--signal=USR1@120` has SLURM deliver SIGUSR1 to the running
+# `srun` step 120s before the `--time` limit hits. PyTorch Lightning's SLURM
+# auto-requeue (enabled below via `+trainer.plugins=[...SLURMEnvironment]`, only
+# armed because we run under `srun` -- see `_SignalConnector` in
+# pytorch_lightning) catches that signal, saves a full checkpoint (weights,
+# optimizer/scheduler state, epoch/global_step, callback state, and -- via
+# MultiTaskModel.on_save_checkpoint -- the GradNorm-lite EMA, which otherwise
+# lives outside any state_dict and would silently reset on resume) to
+# `hpc_ckpt_N.ckpt` under `hydra.run.dir`, then calls `scontrol requeue`
+# itself and exits. SLURM puts the job back in the queue under the *same*
+# $SLURM_JOB_ID; when it restarts, `hydra.run.dir` is pinned below to the same
+# job-scoped path, so Lightning's own hpc-checkpoint auto-detection finds that
+# file and resumes from it with no flag needed on our end (see
+# `_parse_ckpt_path` / `_hpc_resume_path` in pytorch_lightning) -- fully
+# automatic, no manual resubmission.
+#
+# This only fires on a clean time-limit requeue. If the job instead dies some
+# other way (node failure before the signal, manual scancel, OOM, ...), fall
+# back to resubmitting by hand with
+# `model.ckpt_path=<JOB_DIR>/hydra_run/checkpoints/last.ckpt` appended to the
+# command below (save_last: true is on, see configs/callbacks/multitask.yaml;
+# this is the same real Lightning resume path, just picking the last
+# periodically-saved checkpoint instead of the exact-at-signal one -- not
+# `task.task_name=finetune`, which restarts the schedule from epoch 0).
 
 # Usage:
 #   sbatch run_flair3d_plus_multitask_200k.slurm            # base myria3d lr (1e-3)
@@ -73,8 +96,15 @@ START_TIME=$(date +%s)
 
 
 ### --- Myria3D syntax ---
-python run.py experiment=flair3d_plus/multitask_200k \
-  model.lr=${LR}
+# `srun` is required for PyTorch Lightning to detect it's running under SLURM
+# and actually receive the USR1 signal declared above. `hydra.run.dir` is
+# pinned to a job-scoped (not timestamped) path so it stays identical across
+# requeues of the same $SLURM_JOB_ID -- both for the hpc auto-resume checkpoint
+# lookup and for the manual `checkpoints/last.ckpt` fallback mentioned above.
+srun python run.py experiment=flair3d_plus/multitask_200k \
+  model.lr=${LR} \
+  hydra.run.dir=${JOB_DIR}/hydra_run \
+  '+trainer.plugins=[{_target_:pytorch_lightning.plugins.environments.SLURMEnvironment}]'
 
 ### ------------------------
 

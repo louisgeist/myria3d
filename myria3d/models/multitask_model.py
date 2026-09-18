@@ -83,6 +83,8 @@ def _apply_knn_interpolation(
 class MultiTaskModel(LightningModule):
     """Lightning module for Flair3D+ multitask point cloud learning."""
 
+    _GRAD_NORM_LITE_CKPT_KEY = "grad_norm_lite_state"
+
     def __init__(self, **kwargs):
         super().__init__()
         self.save_hyperparameters(ignore=["criteria"])
@@ -134,6 +136,28 @@ class MultiTaskModel(LightningModule):
             else:
                 self.criteria[task_name] = criterion_spec
 
+    def on_save_checkpoint(self, checkpoint: Dict) -> None:
+        """Persist GradNorm-lite's EMA state: it lives on a plain `GradNormLiteEMA`
+        attribute (not an `nn.Module` buffer), so it is invisible to the default
+        Lightning checkpoint and would otherwise silently reset on every resume
+        (e.g. after a SLURM auto-requeue), forcing the per-task loss rescaling to
+        re-warm-up from scratch."""
+        if not self.grad_norm_lite_enabled:
+            return
+        checkpoint[self._GRAD_NORM_LITE_CKPT_KEY] = {
+            "ema": dict(self._grad_norm_lite_ema.ema),
+            "scales": dict(self._grad_norm_lite_scales),
+        }
+
+    def on_load_checkpoint(self, checkpoint: Dict) -> None:
+        if not self.grad_norm_lite_enabled:
+            return
+        state = checkpoint.get(self._GRAD_NORM_LITE_CKPT_KEY)
+        if state is None:
+            return
+        self._grad_norm_lite_ema.ema = dict(state["ema"])
+        self._grad_norm_lite_scales = dict(state["scales"])
+
     def _init_learned_masked_feat(self, enable: bool, keys) -> None:
         """Learned RGB / intensity fill-in for points dropped at train time (Pointcept)."""
         self.learned_masked_feat = enable
@@ -143,9 +167,7 @@ class MultiTaskModel(LightningModule):
         if "color" in self.learned_masked_feat_keys:
             self.color_mask_value = nn.Parameter(torch.zeros(1, len(COLOR_FEATURE_NAMES)))
         if "strength" in self.learned_masked_feat_keys:
-            self.strength_mask_value = nn.Parameter(
-                torch.zeros(1, len(STRENGTH_FEATURE_NAMES))
-            )
+            self.strength_mask_value = nn.Parameter(torch.zeros(1, len(STRENGTH_FEATURE_NAMES)))
 
     def _learned_mask_groups(self):
         return (
@@ -275,9 +297,7 @@ class MultiTaskModel(LightningModule):
         # cloud first would be both wasted work and, for tile_distribution, incorrect
         # (batch.ptr would no longer match the interpolated point count).
         pooled_outputs = {name: raw_outputs[name] for name in self._pooled_tasks}
-        pooled_targets = {
-            name: self._get_batch_target(batch, name) for name in self._pooled_tasks
-        }
+        pooled_targets = {name: self._get_batch_target(batch, name) for name in self._pooled_tasks}
 
         interp_input = {name: raw_outputs[name] for name in self._interpolated_tasks}
         if self.training or "copies" not in batch or not interpolate:
@@ -321,7 +341,11 @@ class MultiTaskModel(LightningModule):
         num_classes = int(task_config["num_classes"])
         probs = torch.softmax(preds.float(), dim=-1)
         pi_hat, q_t, n_t = pool_axis_distribution_from_probs(
-            probs, targets.long().to(preds.device), batch.ptr.to(preds.device), ignore_index, num_classes
+            probs,
+            targets.long().to(preds.device),
+            batch.ptr.to(preds.device),
+            ignore_index,
+            num_classes,
         )
         keep = n_t > 0
         if not bool(keep.any()):
@@ -341,7 +365,9 @@ class MultiTaskModel(LightningModule):
         if task_type == "pixel_semantic":
             return self._compute_pixel_semantic_loss(task_name, criterion, preds, targets, batch)
         if task_type == "tile_distribution":
-            return self._compute_tile_distribution_loss(task_name, criterion, preds, targets, batch)
+            return self._compute_tile_distribution_loss(
+                task_name, criterion, preds, targets, batch
+            )
 
         targets = targets.to(preds.device)
         if task_type == "semantic":
@@ -383,7 +409,9 @@ class MultiTaskModel(LightningModule):
         gathered = self.all_gather(values).float().mean(dim=0)
         return {name: float(gathered[i]) for i, name in enumerate(names)}
 
-    def _apply_grad_norm_lite(self, losses: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def _apply_grad_norm_lite(
+        self, losses: Dict[str, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         """Rescale each task's loss by 1/EMA(last-layer grad norm), à la Pointcept's
         GradNorm-lite. The EMA (and the scales derived from it) are refreshed every
         `grad_norm_lite_interval` steps within the current training epoch (Pointcept's

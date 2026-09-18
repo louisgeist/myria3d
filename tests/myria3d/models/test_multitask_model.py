@@ -156,6 +156,63 @@ def test_log_task_gradient_norms_logs_diagnostic_keys_without_affecting_loss():
     assert -1.0 <= metrics["train/task_grad_cos_segment__elevation"].item() <= 1.0
 
 
+def test_grad_norm_lite_state_round_trips_through_checkpoint_hooks():
+    model = _make_model(grad_norm_lite=True)
+    trainer = _make_trainer(NUM_BATCHES)
+    trainer.fit(model, train_dataloaders=_make_dataloader(_make_batches(NUM_BATCHES)))
+
+    saved_ema = dict(model._grad_norm_lite_ema.ema)
+    saved_scales = dict(model._grad_norm_lite_scales)
+    assert saved_ema  # sanity: the EMA actually recorded something during training
+
+    checkpoint = {}
+    model.on_save_checkpoint(checkpoint)
+
+    fresh_model = _make_model(grad_norm_lite=True)
+    assert fresh_model._grad_norm_lite_ema.ema == {}
+    fresh_model.on_load_checkpoint(checkpoint)
+
+    assert fresh_model._grad_norm_lite_ema.ema == saved_ema
+    assert fresh_model._grad_norm_lite_scales == saved_scales
+
+
+def test_grad_norm_lite_checkpoint_hooks_are_noop_when_disabled():
+    model = _make_model(grad_norm_lite=False)
+    checkpoint = {}
+
+    model.on_save_checkpoint(checkpoint)
+    assert checkpoint == {}
+
+    # Must not crash even though the model never built an EMA to restore into.
+    model.on_load_checkpoint({})
+
+
+def test_grad_norm_lite_state_survives_a_real_lightning_checkpoint_save_and_resume(tmp_path):
+    """The EMA must survive the actual torch.save/torch.load round trip a SLURM
+    auto-requeue hpc checkpoint takes, not just an in-memory dict handoff."""
+    model = _make_model(grad_norm_lite=True)
+    trainer = _make_trainer(NUM_BATCHES)
+    trainer.fit(model, train_dataloaders=_make_dataloader(_make_batches(NUM_BATCHES)))
+    saved_ema = dict(model._grad_norm_lite_ema.ema)
+
+    ckpt_path = tmp_path / "test.ckpt"
+    trainer.save_checkpoint(str(ckpt_path))
+
+    # Same max_epochs as the original run: the restored trainer state already
+    # satisfies it, so the fit loop restores state and exits without running any
+    # further steps -- isolating what the checkpoint restore itself produced from
+    # what more training would produce anyway.
+    fresh_model = _make_model(grad_norm_lite=True)
+    fresh_trainer = _make_trainer(NUM_BATCHES)
+    fresh_trainer.fit(
+        fresh_model,
+        train_dataloaders=_make_dataloader(_make_batches(NUM_BATCHES)),
+        ckpt_path=str(ckpt_path),
+    )
+
+    assert fresh_model._grad_norm_lite_ema.ema == saved_ema
+
+
 def test_configure_optimizers_uses_lr_scheduler_frequency():
     model = _make_model(
         lr_scheduler=functools.partial(torch.optim.lr_scheduler.ReduceLROnPlateau),
@@ -302,4 +359,3 @@ def test_learned_masked_feat_fill_and_gradient():
     assert model.strength_mask_value.grad is not None
     assert torch.isfinite(model.color_mask_value.grad).all()
     assert torch.isfinite(model.strength_mask_value.grad).all()
-
