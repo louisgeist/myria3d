@@ -139,44 +139,17 @@ on which `--chunking`/`--chunk-size` value was used when the JZ-side data was ge
   docstring's documented Usage example runs it with `--chunk-size 100` — confirmed as the value
   actually used to generate the on-disk H3D scenes. `configs/datamodule/downstream/h3d_datamodule.yaml`
   now sets `tile_width: 100`, `subtile_width: 50`, same real 2×2 crop as ECLAIR.
-- **DALES**: still unresolved. `preprocess_dales.py --chunking` argparse-defaults to `3`, but a
-  separate internal note (`README_geist.md` in the sibling Pointcept repo) documents the command
-  actually run with an explicit `--chunking 4` override — the two disagree (~167 m vs. ~125 m
-  per-folder extent off a measured ~500 m raw DALES tile), and neither matches the current
-  `tile_width: ${datamodule.subtile_width}` no-op. Left as-is (point-count bound via
-  `MaximumNumNodes`, capped at 40k points, mirroring Pointcept's `SphereCrop`) until the real JZ-side
-  chunking value is confirmed — see below.
+- **DALES**: confirmed on JZ (2026-09-18) as `--chunking 3` — `preprocess_dales.py`'s own
+  argparse default (an earlier internal note in the sibling Pointcept repo's `README_geist.md`
+  wrongly documented `4`; corrected there too). Off a measured ~500 m raw DALES tile, chunking 3
+  gives an on-disk scene extent of ~166.7 m square. `configs/datamodule/downstream/dales_datamodule.yaml`
+  sets `tile_width: 170` (a small safety margin above the ~166.7 m nominal value, since chunking
+  splits each file's own point bounding box rather than a fixed global grid), `subtile_width: 50`,
+  so `SubtileCrop` now performs a real 4×4 mosaic crop instead of the previous no-op.
 
 **Verify your actual JZ-side tile extents** before trusting results (e.g.
 `np.load(f"{tile}/coord.npy")[:, :2].ptp(0)`), and override `datamodule.tile_width=<meters>` /
-`datamodule.subtile_width=<meters>` on the CLI once DALES' real chunking value is confirmed.
-
-To infer which `--chunking` was used for DALES without re-running preprocessing, inspect the
-on-disk folder names: `preprocess_dales.py` names a chunked scene `<original_ply_stem>_<row>-<col>`
-(`row`/`col` in `[0, chunking)`), and leaves the name untouched (no suffix) when `chunking <= 1`.
-The max `row`/`col` seen across a split's folder names is `chunking - 1`:
-
-```bash
-DALES_ROOT="${DOWNSTREAM_DATA_ROOT:-/data/geist/Pointcept/data}/dales"
-for split in train test; do
-  echo "=== $split ==="
-  ls "$DALES_ROOT/$split" \
-    | grep -oE '_[0-9]+-[0-9]+$' | tr -d '_' \
-    | awk -F'-' '{if($1+0>mr)mr=$1+0; if($2+0>mc)mc=$2+0; n++}
-                 END{if(n==0){print "no _row-col suffixes found -> chunking<=1"}
-                     else{print "max row idx="mr", max col idx="mc" -> chunking =", mr+1}}'
-done
-```
-
-A raw file-count cross-check (works even if some corner subtiles were dropped for being empty,
-as long as most aren't): compare the number of *source* PLY files to the number of output scene
-folders — the ratio should be close to `chunking**2`:
-
-```bash
-n_raw=$(ls /path/to/dales/raw/DALESObjects/train/*.ply | wc -l)
-n_out=$(ls "$DALES_ROOT/train" | wc -l)
-python3 -c "import math; print('chunking ~=', math.sqrt($n_out / $n_raw))"
-```
+`datamodule.subtile_width=<meters>` on the CLI if a given JZ copy turns out to differ.
 
 ---
 
