@@ -2,6 +2,18 @@
 # 50m to reproduce myria3d pipeline.
 voxel: 0.1
 
+# Per-point id/label keys that must survive voxel downsampling by point-picking, not
+# PyG's default mean-reduce (which silently float-casts them) -- see CategoricalGridSampling.
+nathab_categorical_keys:
+  - forest_2d_cell_id
+  - y_forest_2d
+  - roads_cell_id
+  - y_roads
+  - y_nathab_habitat_type
+  - y_nathab_moisture_regime
+  - y_nathab_soil_chemistry
+  - y_nathab_bioclimatic_zone
+
 train:
   SubtileCrop:
     _target_: myria3d.pctl.transforms.transforms.SubtileCrop
@@ -17,9 +29,9 @@ train:
     _target_: myria3d.pctl.transforms.transforms.DropPointsByClass
 
   GridSampling:
-    _target_: torch_geometric.transforms.GridSampling
-    _args_:
-      - ${datamodule.transforms.preparations.voxel}
+    _target_: myria3d.pctl.transforms.transforms.CategoricalGridSampling
+    size: ${datamodule.transforms.preparations.voxel}
+    categorical_keys: ${datamodule.transforms.preparations.nathab_categorical_keys}
 
   MinimumNumNodes:
     _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
@@ -58,9 +70,9 @@ eval:
     _target_: myria3d.pctl.transforms.transforms.CopyFullPreparedTargets
 
   GridSampling:
-    _target_: torch_geometric.transforms.GridSampling
-    _args_:
-      - ${datamodule.transforms.preparations.voxel}
+    _target_: myria3d.pctl.transforms.transforms.CategoricalGridSampling
+    size: ${datamodule.transforms.preparations.voxel}
+    categorical_keys: ${datamodule.transforms.preparations.nathab_categorical_keys}
 
   MinimumNumNodes:
     _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes
@@ -89,9 +101,9 @@ predict:
     _target_: myria3d.pctl.transforms.transforms.CopyFullPos
 
   GridSampling:
-    _target_: torch_geometric.transforms.GridSampling
-    _args_:
-      - ${datamodule.transforms.preparations.voxel}
+    _target_: myria3d.pctl.transforms.transforms.CategoricalGridSampling
+    size: ${datamodule.transforms.preparations.voxel}
+    categorical_keys: ${datamodule.transforms.preparations.nathab_categorical_keys}
 
   MinimumNumNodes:
     _target_: myria3d.pctl.transforms.transforms.MinimumNumNodes

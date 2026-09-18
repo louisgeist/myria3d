@@ -138,8 +138,16 @@ def test_load_pointcept_scene_pixel_semantic_and_nathab_axes(tmp_path):
     )
     np.save(scene_dir / "coord.npy", pos)
     _write_raster_meta(scene_dir)
-    # Raw CarHab: open-temperate-acid-humid (0) and void-sentinel (43).
-    np.save(scene_dir / "natural_habitat.npy", np.array([0, 0, 43, 43], dtype=np.int64))
+    # Pointcept-computed final class ids, one column per axis (habitat_type,
+    # moisture_regime, soil_chemistry, bioclimatic_zone) -- not raw CarHab ids.
+    # Points 0-1 are class 0 on every axis; points 2-3 are void (== each axis's own
+    # ignore_index: 4, 3, 2, 3).
+    np.save(
+        scene_dir / "natural_habitat.npy",
+        np.array(
+            [[0, 0, 0, 0], [0, 0, 0, 0], [4, 3, 2, 3], [4, 3, 2, 3]], dtype=np.uint8
+        ),
+    )
 
     data = load_pointcept_scene(str(scene_dir))
 
@@ -149,11 +157,24 @@ def test_load_pointcept_scene_pixel_semantic_and_nathab_axes(tmp_path):
     assert torch.equal(data.y_roads, torch.tensor([0, 1, 0, 0]))
     assert torch.equal(data.roads_cell_id, torch.tensor([0, 1, 2, 3]))
     assert (data.roads_raster_h, data.roads_raster_w) == (2, 2)
-    # Axis 0 (open / humid / acid / temperate) vs void on every axis.
     assert torch.equal(data.y_nathab_habitat_type, torch.tensor([0, 0, 4, 4]))
     assert torch.equal(data.y_nathab_moisture_regime, torch.tensor([0, 0, 3, 3]))
     assert torch.equal(data.y_nathab_soil_chemistry, torch.tensor([0, 0, 2, 2]))
     assert torch.equal(data.y_nathab_bioclimatic_zone, torch.tensor([0, 0, 3, 3]))
+
+
+def test_load_pointcept_scene_rejects_wrong_natural_habitat_shape(tmp_path):
+    """Regression: natural_habitat.npy used to be read as raw CarHab ids via
+    `.reshape(-1)`, which silently corrupted -- rather than rejected -- files already
+    holding the newer (N, 4) per-axis class-id format (mismatched length vs. num_points
+    made the tensor skip every later crop/GridSampling step untouched)."""
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    np.save(scene_dir / "coord.npy", np.zeros((3, 3), dtype=np.float32))
+    np.save(scene_dir / "natural_habitat.npy", np.zeros((3, 5), dtype=np.uint8))
+
+    with pytest.raises(ValueError, match="natural_habitat.npy"):
+        load_pointcept_scene(str(scene_dir))
 
 
 def test_load_pointcept_scene_missing_raster_and_nathab_fallback(tmp_path):
@@ -169,7 +190,7 @@ def test_load_pointcept_scene_missing_raster_and_nathab_fallback(tmp_path):
     assert torch.equal(data.roads_cell_id, torch.tensor([-1, -1, -1]))
     assert torch.equal(data.y_roads, torch.tensor([2, 2, 2]))
     assert (data.roads_raster_h, data.roads_raster_w) == (0, 0)
-    # Missing natural_habitat.npy is filled with raw id 43 (void on every axis).
+    # Missing natural_habitat.npy is filled with each axis's own ignore_index (void).
     assert torch.equal(data.y_nathab_habitat_type, torch.tensor([4, 4, 4]))
     assert torch.equal(data.y_nathab_moisture_regime, torch.tensor([3, 3, 3]))
     assert torch.equal(data.y_nathab_soil_chemistry, torch.tensor([2, 2, 2]))

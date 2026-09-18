@@ -5,8 +5,11 @@ from typing import Dict, List, Sequence
 
 import numpy as np
 import torch
+import torch_geometric.nn
 from torch_geometric.data import Data
+from torch_geometric.nn.pool.consecutive import consecutive_cluster
 from torch_geometric.transforms import BaseTransform
+from torch_geometric.transforms import GridSampling as _PyGGridSampling
 
 from myria3d.pctl.dataset.utils import get_num_subtiles, get_subtile_choice
 from myria3d.utils import utils
@@ -141,6 +144,66 @@ class SubtileCrop(BaseTransform):
             f"subtile_width={self.subtile_width}, random={self.random}, "
             f"min_points={self.min_points})"
         )
+
+
+def _pick_one_point_per_voxel(pos: torch.Tensor, size) -> torch.Tensor:
+    """One input-point index per occupied voxel of side `size`, picked uniformly at
+    random among that voxel's points.
+
+    Mirrors Pointcept's own ``GridSample`` (`pointcept/datasets/transform.py`), which
+    downsamples by picking one representative point per voxel and indexing every field
+    with it -- rather than `torch_geometric.transforms.GridSampling`'s per-voxel
+    `scatter(reduce='mean')`, which always upcasts integer fields to float (it only
+    special-cases the literal key `'y'`, via one-hot + argmax majority vote).
+    """
+    cluster = torch_geometric.nn.voxel_grid(pos, size)
+    cluster, _ = consecutive_cluster(cluster)
+    order = torch.argsort(cluster)
+    counts = torch.bincount(cluster)
+    offsets = torch.cumsum(counts, dim=0) - counts
+    rand_offset_in_voxel = (torch.rand(counts.shape[0]) * counts).long()
+    return order[offsets + rand_offset_in_voxel]
+
+
+class CategoricalGridSampling(BaseTransform):
+    """Voxel-downsample `pos`/`x`/`y`/... as usual (delegates to PyG's `GridSampling`,
+    unchanged), but downsample `categorical_keys` by picking one representative point
+    per voxel instead of PyG's generic mean-reduce -- see `_pick_one_point_per_voxel`.
+
+    Scoped to Flair3D+ multitask's own per-point id/label keys (`{task}_cell_id`,
+    `y_forest_2d`, `y_roads`, `y_nathab_*`): averaging two different raster cell ids or
+    two different class ids produces a value that is neither -- exactly the failure mode
+    that silently corrupted these fields (and, before that, crashed batch collate
+    whenever it happened inconsistently across a batch -- see git history on this file).
+    `y_elevation` (a real-valued regression target) is fine under a mean and is not
+    included here.
+    """
+
+    def __init__(self, size, categorical_keys: Sequence[str]):
+        self.size = size
+        self.categorical_keys = list(categorical_keys)
+        self._grid_sampling = _PyGGridSampling(size)
+
+    def __call__(self, data: Data) -> Data:
+        num_nodes = data.num_nodes
+        representative = None
+
+        saved = {}
+        for key in self.categorical_keys:
+            if key in data and torch.is_tensor(data[key]) and data[key].size(0) == num_nodes:
+                if representative is None:
+                    representative = _pick_one_point_per_voxel(data.pos, self.size)
+                saved[key] = data[key][representative]
+                del data[key]
+
+        data = self._grid_sampling(data)
+
+        for key, value in saved.items():
+            data[key] = value
+        return data
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(size={self.size}, categorical_keys={self.categorical_keys})"
 
 
 class MaximumNumNodes(BaseTransform):

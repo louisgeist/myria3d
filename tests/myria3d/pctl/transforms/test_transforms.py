@@ -3,7 +3,10 @@ import pytest
 import torch
 import torch_geometric
 
+from torch_geometric.data import Batch, Data
+
 from myria3d.pctl.transforms.transforms import (
+    CategoricalGridSampling,
     DropPointsByClass,
     MinimumNumNodes,
     RandomDropColor,
@@ -303,3 +306,53 @@ def test_RandomDropColor_stacked_calls_or_the_mask():
     dropped = second(first(data))
     assert int(dropped.color_mask.sum()) >= 10
     assert torch.all(dropped.x[dropped.color_mask, 1:] == 0)
+
+
+def test_CategoricalGridSampling_preserves_dtype_and_values_under_real_merging():
+    """Regression: plain torch_geometric.transforms.GridSampling mean-reduces every
+    per-point tensor matching num_nodes (except the literal key 'y') -- always
+    float-casting integer id/label tensors, even a single-point voxel, and blending
+    distinct class ids into meaningless intermediate values. CategoricalGridSampling
+    must instead pick one real point per voxel for the given keys."""
+    torch.manual_seed(0)
+    n = 2000
+    pos = torch.rand(n, 3, dtype=torch.float32)  # dense enough that voxels merge points
+    y_forest_2d = torch.randint(0, 2, (n,), dtype=torch.int64)
+    forest_2d_cell_id = torch.randint(0, 50, (n,), dtype=torch.int64)
+    data = Data(pos=pos, y_forest_2d=y_forest_2d, forest_2d_cell_id=forest_2d_cell_id)
+
+    out = CategoricalGridSampling(
+        size=0.1, categorical_keys=["y_forest_2d", "forest_2d_cell_id"]
+    )(data)
+
+    assert out.num_nodes < n  # voxels actually merged points
+    assert out.y_forest_2d.dtype == torch.int64
+    assert out.forest_2d_cell_id.dtype == torch.int64
+    # every picked value is one that existed pre-merge -- never an averaged in-between
+    assert set(out.y_forest_2d.tolist()) <= set(y_forest_2d.tolist())
+    assert set(out.forest_2d_cell_id.tolist()) <= set(forest_2d_cell_id.tolist())
+
+
+def test_CategoricalGridSampling_keeps_two_scenes_batch_collate_safe():
+    """Regression for the Jean Zay crash this transform fixes: without it, a scene
+    whose categorical key happens to skip GridSampling (e.g. wrong shape upstream)
+    stays int64/wrong-length while a normally-shaped scene gets mean-float-cast by
+    plain GridSampling, so torch.cat can't collate the two. With
+    CategoricalGridSampling both scenes keep the categorical key as int64 at the
+    post-sampling point count, regardless of whether voxels actually merged."""
+    torch.manual_seed(0)
+    small = Data(
+        pos=torch.rand(3, 3, dtype=torch.float32),
+        y_forest_2d=torch.tensor([0, 1, 0], dtype=torch.int64),
+    )
+    big = Data(
+        pos=torch.rand(500, 3, dtype=torch.float32),
+        y_forest_2d=torch.randint(0, 2, (500,), dtype=torch.int64),
+    )
+
+    grid = CategoricalGridSampling(size=0.1, categorical_keys=["y_forest_2d"])
+    a, b = grid(small), grid(big)
+
+    assert a.y_forest_2d.dtype == torch.long == b.y_forest_2d.dtype
+    batch = Batch.from_data_list([a, b])
+    assert batch.y_forest_2d.dtype == torch.long

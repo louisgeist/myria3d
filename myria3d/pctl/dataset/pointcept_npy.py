@@ -16,7 +16,6 @@ from torch_geometric.data import Data
 from myria3d.pctl.dataset.flair3d import load_excluded_tiles_from_details_csv
 from myria3d.pctl.dataset.flair3d_label_remap import (
     NATURAL_HABITAT_AXIS_DEFINITIONS,
-    apply_remap,
     get_definition,
 )
 from myria3d.pctl.dataset.utils import (
@@ -54,10 +53,6 @@ PIXEL_SEMANTIC_MISSING_FILLS = {
     "forest_2d": 2,
     "roads": 2,
 }
-
-# Raw CarHab id used to fill natural_habitat when natural_habitat.npy is absent — void in
-# every axis LUT (see flair3d_label_remap.py), matching Pointcept's own missing-fill sentinel.
-NATURAL_HABITAT_MISSING_FILL_RAW_ID = 43
 
 
 def load_too_small_tiles_from_csv(csv_path: Optional[str]) -> Set[Tuple[str, str]]:
@@ -311,16 +306,30 @@ def load_pointcept_scene(scene_dir: str) -> Data:
         kwargs[f"{task_name}_raster_h"] = int(raster_h)
         kwargs[f"{task_name}_raster_w"] = int(raster_w)
 
-    # natural_habitat.npy stores raw (near-raw) CarHab ids; remapped here into 4
-    # low-cardinality ecological axes (tile_distribution targets), never used directly.
+    # natural_habitat.npy stores the 4 ecological axes as already-final per-point class
+    # ids -- one column per NATURAL_HABITAT_AXIS_DEFINITIONS entry, in that order --
+    # computed upstream by Pointcept's own preprocessing (no raw CarHab id to remap here
+    # any more). Void (point outside CarHab coverage) is encoded per-axis as that axis's
+    # own ignore_index, matching configs/dataset_description/flair3d_plus_multitask.yaml.
     nh_path = osp.join(scene_dir, "natural_habitat.npy")
+    num_nathab_axes = len(NATURAL_HABITAT_AXIS_DEFINITIONS)
     if osp.isfile(nh_path):
-        nh_raw = np.load(nh_path).reshape(-1).astype(np.int64, copy=False)
+        nh_axes = np.load(nh_path)
+        if nh_axes.shape != (num_points, num_nathab_axes):
+            raise ValueError(
+                f"natural_habitat.npy must be ({num_points}, {num_nathab_axes}), got "
+                f"{nh_axes.shape} in {scene_dir}"
+            )
+        for col, task_name in enumerate(NATURAL_HABITAT_AXIS_DEFINITIONS):
+            kwargs[f"y_{task_name}"] = torch.from_numpy(
+                nh_axes[:, col].astype(np.int64, copy=False)
+            )
     else:
-        nh_raw = np.full(num_points, NATURAL_HABITAT_MISSING_FILL_RAW_ID, dtype=np.int64)
-    for task_name, definition_name in NATURAL_HABITAT_AXIS_DEFINITIONS.items():
-        remapped = apply_remap(nh_raw, get_definition("natural_habitat", definition_name))
-        kwargs[f"y_{task_name}"] = torch.from_numpy(remapped.astype(np.int64, copy=False))
+        for task_name, definition_name in NATURAL_HABITAT_AXIS_DEFINITIONS.items():
+            ignore_index = get_definition("natural_habitat", definition_name).ignore_index
+            kwargs[f"y_{task_name}"] = torch.full(
+                (num_points,), ignore_index, dtype=torch.int64
+            )
 
     return Data(**kwargs)
 
