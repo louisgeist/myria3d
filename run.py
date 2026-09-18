@@ -13,12 +13,16 @@ import sys
 from glob import glob
 import dotenv
 import hydra
+import torch
 from omegaconf import DictConfig
 from tqdm import tqdm
 
 from myria3d.utils import utils
 from myria3d.pctl.dataset.hdf5 import create_hdf5
 from myria3d.pctl.dataset.utils import get_las_paths_by_split_dict
+
+# Use TF32 on Tensor Core GPUs (Ampere+) for faster matmuls with negligible precision loss.
+torch.set_float32_matmul_precision("high")
 
 TASK_NAME_DETECTION_STRING = "task.task_name="
 DEFAULT_DIRECTORY = "trained_model_assets/"
