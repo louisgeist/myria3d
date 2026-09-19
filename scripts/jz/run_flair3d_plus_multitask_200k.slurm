@@ -2,7 +2,7 @@
 
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs/slurm/%j.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs/slurm/%j.err
-#SBATCH -A uhn@h100
+#SBATCH -A ppm@h100
 #SBATCH -C h100
 
 #SBATCH --nodes=1
