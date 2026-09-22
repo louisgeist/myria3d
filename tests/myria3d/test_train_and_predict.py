@@ -1,26 +1,24 @@
 import os.path as osp
+from pathlib import Path
 from typing import List
 
 import numpy as np
 import pytest
 from lightning.pytorch.accelerators import find_usable_cuda_devices
-from pathlib import Path
 from pdaltools import las_info
-
+from tests.conftest import (
+    DEFAULT_EPSG,
+    SINGLE_POINT_CLOUD,
+    make_default_hydra_cfg,
+    run_hydra_decorated_command,
+    run_hydra_decorated_command_with_return_error,
+)
+from tests.runif import RunIf
 
 from myria3d.pctl.dataset.toy_dataset import TOY_LAS_DATA
 from myria3d.pctl.dataset.utils import pdal_read_las_array
 from myria3d.predict import predict
 from myria3d.train import train
-from tests.conftest import (
-    make_default_hydra_cfg,
-    run_hydra_decorated_command,
-    run_hydra_decorated_command_with_return_error,
-    SINGLE_POINT_CLOUD,
-    DEFAULT_EPSG,
-)
-from tests.runif import RunIf
-
 
 """
 Sanity checks to make sure the model train/val/predict/test logics do not crash.
@@ -202,6 +200,25 @@ def test_run_test_with_trained_model_on_toy_dataset_on_gpu(
     _run_test_right_after_training(
         one_epoch_trained_RandLaNet_checkpoint, toy_dataset_hdf5_path, tmpdir, "gpu"
     )
+
+
+def test_run_validate_with_trained_model_on_toy_dataset_on_cpu(
+    one_epoch_trained_RandLaNet_checkpoint, toy_dataset_hdf5_path, tmpdir
+):
+    """`task.task_name=validate` runs Trainer.validate against the val split only,
+    loading weights from ckpt_path without touching optimizer/epoch state."""
+    tmp_paths_overrides = _make_list_of_necesary_hydra_overrides_with_tmp_paths(
+        toy_dataset_hdf5_path, tmpdir
+    )
+    cfg_validate_using_trained_model = make_default_hydra_cfg(
+        overrides=[
+            "experiment=RandLaNetDebug",
+            "task.task_name=validate",
+            f"model.ckpt_path={one_epoch_trained_RandLaNet_checkpoint}",
+        ]
+        + tmp_paths_overrides
+    )
+    train(cfg_validate_using_trained_model)
 
 
 def _run_test_right_after_training(

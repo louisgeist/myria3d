@@ -20,11 +20,11 @@ from pytorch_lightning import (
     seed_everything,
 )
 from pytorch_lightning.loggers.logger import Logger
+from run import TASK_NAMES
 
 from myria3d.models.model import Model
 from myria3d.utils import utils
 from myria3d.utils.training_schedule import resolve_training_schedule
-from run import TASK_NAMES
 
 log = utils.get_logger(__name__)
 
@@ -44,6 +44,12 @@ def train(config: DictConfig) -> Trainer:
     test:
         Tests a trained neural network on the test dataset of a prepared dataset (i.e. the `test` subdir
         which contains LAS files with a classification).
+
+    validate:
+        Runs the validation loop only (config.model.ckpt_path required) against the val split --
+        e.g. to sanity-check a checkpoint or the val set size/composition without a full training
+        run. Unlike a `fit` resume, this only loads model weights (via Trainer.validate's own
+        ckpt_path handling), not optimizer/scheduler/epoch state.
 
     finetune:
         Finetunes a checkpointed neural network on a prepared dataset, which muste be specified
@@ -158,6 +164,11 @@ def train(config: DictConfig) -> Trainer:
         log.info(f"Test will use specified model checkpointed at \n {config.model.ckpt_path}")
         trainer.test(model=model, datamodule=datamodule, ckpt_path=config.model.ckpt_path)
         log.info("End of testing!")
+
+    if task_name == TASK_NAMES.VALIDATE.value:
+        log.info(f"Starting validation using model checkpointed at \n {config.model.ckpt_path}")
+        trainer.validate(model=model, datamodule=datamodule, ckpt_path=config.model.ckpt_path)
+        log.info("End of validation!")
 
     if task_name == TASK_NAMES.FINETUNE.value:
         log.info("Starting finetuning pretrained model on new data!")

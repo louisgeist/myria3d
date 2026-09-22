@@ -6,20 +6,20 @@ except ImportError:
         "Warning: package comet_ml not found. This may break things if you use a comet callback."
     )
 
-from enum import Enum
-
 import os
 import sys
+from enum import Enum
 from glob import glob
+
 import dotenv
 import hydra
 import torch
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from myria3d.utils import utils
 from myria3d.pctl.dataset.hdf5 import create_hdf5
 from myria3d.pctl.dataset.utils import get_las_paths_by_split_dict
+from myria3d.utils import utils
 
 # Use TF32 on Tensor Core GPUs (Ampere+) for faster matmuls with negligible precision loss.
 torch.set_float32_matmul_precision("high")
@@ -34,6 +34,7 @@ DEFAULT_ENV = "placeholder.env"
 class TASK_NAMES(Enum):
     FIT = "fit"
     TEST = "test"
+    VALIDATE = "validate"
     FINETUNE = "finetune"
     PREDICT = "predict"
     HDF5 = "create_hdf5"
@@ -102,9 +103,7 @@ def launch_hdf5(config: DictConfig):
     raster_root = config.datamodule.get("raster_root")
     points_enricher = None
     if raster_root:
-        points_enricher = partial(
-            enrich_points_with_raster_labels, raster_root=raster_root
-        )
+        points_enricher = partial(enrich_points_with_raster_labels, raster_root=raster_root)
     create_hdf5(
         las_paths_by_split_dict=las_paths_by_split_dict,
         hdf5_file_path=config.datamodule.get("hdf5_file_path"),
@@ -129,7 +128,12 @@ if __name__ == "__main__":
 
     log.info(f"Task: {task_name}")
 
-    if task_name in [TASK_NAMES.FIT.value, TASK_NAMES.TEST.value, TASK_NAMES.FINETUNE.value]:
+    if task_name in [
+        TASK_NAMES.FIT.value,
+        TASK_NAMES.TEST.value,
+        TASK_NAMES.VALIDATE.value,
+        TASK_NAMES.FINETUNE.value,
+    ]:
         # load environment variables from `.env` file if it exists
         # recursively searches for `.env` in all folders starting from work dir
         dotenv.load_dotenv(override=True)
