@@ -10,6 +10,18 @@ excluded_tiles_details_csv: ${datamodule.data_root}/missing_coord_tiles.details.
 
 tile_width: 100
 subtile_width: 50
+# Cap the number of val tiles used per eval epoch (null = full val split). Set this in
+# an experiment config to bound validation time on a large val split, mirroring the
+# fixed-size val subset convention from the Pointcept-side training setup.
+max_val_tiles: null
+val_tiles_seed: 0
+# Optional CSV pinning the val split to an exact patch_id list (e.g. Pointcept's own
+# stratified subset manifest at `${datamodule.data_root}/manifests/val_dev_subset_2000.csv`
+# -- 2000 tiles national on Jean Zay; a stale, D067-only 773-tile copy on Hecate). Takes
+# priority over max_val_tiles when the file is found; falls back to max_val_tiles
+# random sampling otherwise (with a warning), so this is safe to leave pointed at a
+# path that doesn't exist on every machine.
+val_tiles_manifest: null
 
 pre_filter:
   _target_: functools.partial

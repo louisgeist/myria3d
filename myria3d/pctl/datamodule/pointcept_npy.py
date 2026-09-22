@@ -30,6 +30,9 @@ class PointceptNpyDatamodule(LightningDataModule):
         tile_width: Number = 100,
         subtile_width: Number = 50,
         subtile_overlap: Number = 0,
+        max_val_tiles: Optional[int] = None,
+        val_tiles_seed: int = 0,
+        val_tiles_manifest: Optional[str] = None,
         pre_filter: Optional[Callable] = pre_filter_below_n_points,
         batch_size: int = 12,
         num_workers: int = 1,
@@ -47,6 +50,9 @@ class PointceptNpyDatamodule(LightningDataModule):
         self.tile_width = tile_width
         self.subtile_width = subtile_width
         self.subtile_overlap = subtile_overlap
+        self.max_val_tiles = max_val_tiles
+        self.val_tiles_seed = val_tiles_seed
+        self.val_tiles_manifest = val_tiles_manifest
         self.pre_filter = pre_filter
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -89,6 +95,9 @@ class PointceptNpyDatamodule(LightningDataModule):
             tile_width=self.tile_width,
             subtile_width=self.subtile_width,
             subtile_overlap=self.subtile_overlap,
+            max_val_tiles=self.max_val_tiles,
+            val_tiles_seed=self.val_tiles_seed,
+            val_tiles_manifest=self.val_tiles_manifest,
             pre_filter=self.pre_filter,
             train_transform=self.train_transform,
             eval_transform=self.eval_transform,

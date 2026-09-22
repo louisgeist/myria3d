@@ -50,6 +50,15 @@ datamodule:
   csv_manifest: ${oc.env:FLAIR3D_CSV_MANIFEST,${datamodule.data_root}/raw/scene_split_manifest_D067.csv}
   tile_width: 100
   subtile_width: 50
+  # Pin validation to Pointcept's own stratified val subset manifest -- national
+  # 2000-tile file on Jean Zay (comparable val curves to the Pointcept-side runs);
+  # Hecate has a stale, D067-only 773-tile copy under the same path (never
+  # regenerated after other departments were added), so expect a smaller val split
+  # there. If the file is missing entirely on a given machine, falls back with a
+  # warning to a random max_val_tiles=2000 sample -- either way, this bounds
+  # validation, which otherwise dominates wall-clock time on the full split.
+  val_tiles_manifest: ${datamodule.data_root}/manifests/val_dev_subset_2000.csv
+  max_val_tiles: 2000
   transforms:
     preparations:
       train:

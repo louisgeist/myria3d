@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os.path as osp
+import random
 from numbers import Number
 from typing import Callable, List, Optional, Sequence, Set, Tuple
 
@@ -77,6 +78,31 @@ def load_too_small_tiles_from_csv(csv_path: Optional[str]) -> Set[Tuple[str, str
     return too_small
 
 
+def load_val_tiles_manifest(csv_path: Optional[str]) -> Optional[Set[str]]:
+    """Load a fixed `patch_id` allowlist for the val split, e.g. Pointcept's own
+    `manifests/val_dev_subset_2000.csv` sidecar (stratified subset, not a random
+    sample). Returns None (caller falls back to `max_val_tiles` random sampling) if
+    `csv_path` is unset or the file isn't there -- e.g. on a machine that only has a
+    stale/partial copy of the data root."""
+    if not csv_path:
+        return None
+    if not osp.isfile(csv_path):
+        log.warning(
+            "Val tiles manifest CSV not found: %s. Falling back to max_val_tiles sampling.",
+            csv_path,
+        )
+        return None
+
+    patch_ids: Set[str] = set()
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            patch_id = (row.get("patch_id") or "").strip()
+            if patch_id:
+                patch_ids.add(patch_id)
+    return patch_ids
+
+
 def build_scene_list(
     data_root: str,
     csv_manifest: str,
@@ -86,11 +112,27 @@ def build_scene_list(
     tile_width: Number = 100,
     subtile_width: Number = 50,
     subtile_overlap: Number = 0,
+    max_val_tiles: Optional[int] = None,
+    val_tiles_seed: int = 0,
+    val_tiles_manifest: Optional[str] = None,
 ) -> List[SceneEntry]:
     """Build scene directories from a Pointcept-style split manifest CSV.
 
     Train scenes yield one entry (random subtile at transform time). Val/test scenes
     yield one entry per mosaic subtile (subtile_index 0..N-1).
+
+    Validating on the full val split every eval epoch is too slow, so the val split
+    can be bounded to a fixed-size subset two ways (mirroring the Pointcept-side
+    convention of validating on ~2000 tiles instead of the full split):
+    - `val_tiles_manifest`: pin the val split to the exact `patch_id`s listed in a
+      sidecar CSV (see `load_val_tiles_manifest`), e.g. to reuse Pointcept's own
+      stratified subset and get directly comparable val curves. Takes priority when
+      the file is found.
+    - `max_val_tiles`: otherwise (or if `val_tiles_manifest` is unset/missing, or the
+      manifest subset is itself still too large), take a deterministic
+      `val_tiles_seed`-keyed random sample instead.
+    `test` is never bounded: it's only evaluated once (end of training /
+    `task.task_name=test`), so full coverage is cheap there.
     """
     eval_subtiles_per_scene = get_num_subtiles(
         tile_width, subtile_width, subtile_overlap=subtile_overlap
@@ -104,6 +146,7 @@ def build_scene_list(
     excluded_tiles = excluded | too_small
 
     scenes: List[SceneEntry] = []
+    val_scene_dirs: List[str] = []
     skipped_missing_coord = 0
     with open(csv_manifest, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -117,18 +160,46 @@ def build_scene_list(
 
             dept_year = row.get("dept_year") or patch_id.split("_")[0]
             roi = row.get("roi") or patch_id.split("_")[1]
-            scene_dir = osp.join(
-                data_root, split, f"{dept_year}_LIDARHD", roi, patch_id
-            )
+            scene_dir = osp.join(data_root, split, f"{dept_year}_LIDARHD", roi, patch_id)
             coord_path = osp.join(scene_dir, "coord.npy")
             if not osp.isfile(coord_path):
                 skipped_missing_coord += 1
                 continue
             if split == "train":
                 scenes.append((scene_dir, split, None))
+            elif split == "val":
+                val_scene_dirs.append(scene_dir)
             else:
                 for subtile_index in range(eval_subtiles_per_scene):
                     scenes.append((scene_dir, split, subtile_index))
+
+    num_val_tiles_total = len(val_scene_dirs)
+    pinned_patch_ids = load_val_tiles_manifest(val_tiles_manifest)
+    if pinned_patch_ids is not None:
+        val_scene_dirs = sorted(
+            d for d in val_scene_dirs if osp.basename(osp.normpath(d)) in pinned_patch_ids
+        )
+        log.info(
+            "PointceptNpy: val split pinned to %s (%d/%d manifest tiles found locally out of "
+            "%d available).",
+            val_tiles_manifest,
+            len(val_scene_dirs),
+            len(pinned_patch_ids),
+            num_val_tiles_total,
+        )
+    if max_val_tiles is not None and len(val_scene_dirs) > max_val_tiles:
+        val_scene_dirs = sorted(
+            random.Random(val_tiles_seed).sample(val_scene_dirs, max_val_tiles)
+        )
+        log.info(
+            "PointceptNpy: capping val split to %d/%d tiles (val_tiles_seed=%d).",
+            max_val_tiles,
+            num_val_tiles_total,
+            val_tiles_seed,
+        )
+    for scene_dir in val_scene_dirs:
+        for subtile_index in range(eval_subtiles_per_scene):
+            scenes.append((scene_dir, "val", subtile_index))
 
     log.info(
         "PointceptNpy: %d dataset entries from manifest (skipped %d without coord.npy).",
@@ -248,9 +319,7 @@ def load_pointcept_scene(scene_dir: str) -> Data:
                 # here, or genuinely-Void points get silently relabeled Building(0).
                 kwargs[data_key] = torch.from_numpy(values.astype(np.int64, copy=False))
         elif data_key == "y_elevation":
-            kwargs[data_key] = torch.full(
-                (num_points,), float("nan"), dtype=torch.float32
-            )
+            kwargs[data_key] = torch.full((num_points,), float("nan"), dtype=torch.float32)
         elif data_key in MULTITASK_MISSING_FILLS:
             kwargs[data_key] = torch.full(
                 (num_points,),
@@ -327,9 +396,7 @@ def load_pointcept_scene(scene_dir: str) -> Data:
     else:
         for task_name, definition_name in NATURAL_HABITAT_AXIS_DEFINITIONS.items():
             ignore_index = get_definition("natural_habitat", definition_name).ignore_index
-            kwargs[f"y_{task_name}"] = torch.full(
-                (num_points,), ignore_index, dtype=torch.int64
-            )
+            kwargs[f"y_{task_name}"] = torch.full((num_points,), ignore_index, dtype=torch.int64)
 
     return Data(**kwargs)
 
@@ -346,6 +413,9 @@ class PointceptNpyDataset(Dataset):
         tile_width: Number = 100,
         subtile_width: Number = 50,
         subtile_overlap: Number = 0,
+        max_val_tiles: Optional[int] = None,
+        val_tiles_seed: int = 0,
+        val_tiles_manifest: Optional[str] = None,
         pre_filter: Callable[[Data], bool] = pre_filter_below_n_points,
         train_transform: Optional[List[Callable]] = None,
         eval_transform: Optional[List[Callable]] = None,
@@ -361,6 +431,9 @@ class PointceptNpyDataset(Dataset):
             tile_width=tile_width,
             subtile_width=subtile_width,
             subtile_overlap=subtile_overlap,
+            max_val_tiles=max_val_tiles,
+            val_tiles_seed=val_tiles_seed,
+            val_tiles_manifest=val_tiles_manifest,
         )
 
     def __len__(self) -> int:
@@ -394,9 +467,7 @@ class PointceptNpyDataset(Dataset):
 
     def _indices_for_split(self, split: SPLIT_TYPE) -> List[int]:
         return [
-            idx
-            for idx, (_, scene_split, _) in enumerate(self._scenes)
-            if scene_split == split
+            idx for idx, (_, scene_split, _) in enumerate(self._scenes) if scene_split == split
         ]
 
     @property

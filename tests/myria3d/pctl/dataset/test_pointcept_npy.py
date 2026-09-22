@@ -77,6 +77,128 @@ def test_build_scene_list_expands_val_into_four_subtiles(pointcept_manifest_tree
     assert len({entry[0] for entry in val_entries}) == 1
 
 
+def _pointcept_manifest_tree_with_n_val_tiles(tmp_path, n_val_tiles):
+    data_root = tmp_path / "data"
+    manifest = tmp_path / "manifest.csv"
+    rows = [
+        {
+            "split": "val",
+            "patch_id": f"D067-2021_UU-S1-31_1-{i}",
+            "dept_year": "D067-2021",
+            "roi": "UU-S1-31",
+            "LIDARHD": "True",
+        }
+        for i in range(n_val_tiles)
+    ]
+    _write_manifest(str(manifest), rows)
+    for row in rows:
+        _write_scene(str(data_root), "val", row["patch_id"], row["dept_year"], row["roi"])
+    return str(data_root), str(manifest)
+
+
+def test_build_scene_list_caps_val_tiles_deterministically(tmp_path):
+    data_root, manifest = _pointcept_manifest_tree_with_n_val_tiles(tmp_path, n_val_tiles=10)
+
+    scenes_a = build_scene_list(
+        data_root=data_root,
+        csv_manifest=manifest,
+        tile_width=100,
+        subtile_width=50,
+        max_val_tiles=3,
+        val_tiles_seed=42,
+    )
+    scenes_b = build_scene_list(
+        data_root=data_root,
+        csv_manifest=manifest,
+        tile_width=100,
+        subtile_width=50,
+        max_val_tiles=3,
+        val_tiles_seed=42,
+    )
+
+    val_tiles_a = {s[0] for s in scenes_a if s[1] == "val"}
+    val_tiles_b = {s[0] for s in scenes_b if s[1] == "val"}
+    assert len(val_tiles_a) == 3
+    # 3 tiles x 4 subtiles/tile (100 m tile / 50 m subtile) each.
+    assert len([s for s in scenes_a if s[1] == "val"]) == 12
+    assert val_tiles_a == val_tiles_b  # same seed -> same subset
+
+
+def test_build_scene_list_does_not_cap_val_tiles_by_default(tmp_path):
+    data_root, manifest = _pointcept_manifest_tree_with_n_val_tiles(tmp_path, n_val_tiles=10)
+
+    scenes = build_scene_list(
+        data_root=data_root,
+        csv_manifest=manifest,
+        tile_width=100,
+        subtile_width=50,
+    )
+
+    val_tiles = {s[0] for s in scenes if s[1] == "val"}
+    assert len(val_tiles) == 10
+
+
+def test_build_scene_list_pins_val_tiles_to_manifest(tmp_path):
+    data_root, manifest = _pointcept_manifest_tree_with_n_val_tiles(tmp_path, n_val_tiles=10)
+    val_tiles_manifest = tmp_path / "val_dev_subset_2000.csv"
+    pinned_patch_ids = [f"D067-2021_UU-S1-31_1-{i}" for i in (2, 5, 7)]
+    with open(val_tiles_manifest, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["split", "patch_id"])
+        writer.writeheader()
+        for patch_id in pinned_patch_ids:
+            writer.writerow({"split": "val", "patch_id": patch_id})
+
+    scenes = build_scene_list(
+        data_root=data_root,
+        csv_manifest=manifest,
+        tile_width=100,
+        subtile_width=50,
+        val_tiles_manifest=str(val_tiles_manifest),
+    )
+
+    val_patch_ids = {os.path.basename(s[0]) for s in scenes if s[1] == "val"}
+    assert val_patch_ids == set(pinned_patch_ids)
+    assert len([s for s in scenes if s[1] == "val"]) == 12  # 3 tiles x 4 subtiles
+
+
+def test_build_scene_list_falls_back_to_max_val_tiles_when_manifest_missing(tmp_path):
+    data_root, manifest = _pointcept_manifest_tree_with_n_val_tiles(tmp_path, n_val_tiles=10)
+
+    scenes = build_scene_list(
+        data_root=data_root,
+        csv_manifest=manifest,
+        tile_width=100,
+        subtile_width=50,
+        val_tiles_manifest=str(tmp_path / "does_not_exist.csv"),
+        max_val_tiles=3,
+        val_tiles_seed=42,
+    )
+
+    val_tiles = {s[0] for s in scenes if s[1] == "val"}
+    assert len(val_tiles) == 3
+
+
+def test_build_scene_list_manifest_ignores_patch_ids_not_locally_available(tmp_path):
+    data_root, manifest = _pointcept_manifest_tree_with_n_val_tiles(tmp_path, n_val_tiles=3)
+    val_tiles_manifest = tmp_path / "val_dev_subset_2000.csv"
+    with open(val_tiles_manifest, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["split", "patch_id"])
+        writer.writeheader()
+        writer.writerow({"split": "val", "patch_id": "D067-2021_UU-S1-31_1-0"})
+        writer.writerow({"split": "val", "patch_id": "some_tile_not_present_here"})
+
+    scenes = build_scene_list(
+        data_root=data_root,
+        csv_manifest=manifest,
+        tile_width=100,
+        subtile_width=50,
+        val_tiles_manifest=str(val_tiles_manifest),
+    )
+
+    val_patch_ids = {os.path.basename(s[0]) for s in scenes if s[1] == "val"}
+    assert val_patch_ids == {"D067-2021_UU-S1-31_1-0"}
+
+
 def test_pointcept_npy_dataset_sets_patch_id(pointcept_manifest_tree):
     data_root, manifest = pointcept_manifest_tree
     dataset = PointceptNpyDataset(
@@ -144,9 +266,7 @@ def test_load_pointcept_scene_pixel_semantic_and_nathab_axes(tmp_path):
     # ignore_index: 4, 3, 2, 3).
     np.save(
         scene_dir / "natural_habitat.npy",
-        np.array(
-            [[0, 0, 0, 0], [0, 0, 0, 0], [4, 3, 2, 3], [4, 3, 2, 3]], dtype=np.uint8
-        ),
+        np.array([[0, 0, 0, 0], [0, 0, 0, 0], [4, 3, 2, 3], [4, 3, 2, 3]], dtype=np.uint8),
     )
 
     data = load_pointcept_scene(str(scene_dir))
