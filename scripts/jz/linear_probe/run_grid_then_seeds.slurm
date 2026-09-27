@@ -2,13 +2,16 @@
 
 #SBATCH --output=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs/slurm/%j.out
 #SBATCH --error=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs/slurm/%j.err
-#SBATCH -A uhn@h100
-#SBATCH -C h100
+#SBATCH -A uhn@a100
+#SBATCH -C a100
+# ^ moved off uhn@h100 (hours exhausted) -- see the TODO note in
+# scripts/jz/run_flair3d_plus_multitask_200k_a100.slurm re: cpus-per-task ratio
+# and possible --qos= requirement, unverified for this partition.
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=24
+#SBATCH --cpus-per-task=8
 #SBATCH --hint=nomultithread
 
 #SBATCH --job-name=lp-grid-then-seeds
@@ -55,7 +58,6 @@ cp $0 ${JOB_DIR}/script.slurm
 } > ${JOB_DIR}/job_info.log
 
 module purge
-module load arch/h100
 module load cuda/12.1.0
 module load miniforge/24.9.0
 
