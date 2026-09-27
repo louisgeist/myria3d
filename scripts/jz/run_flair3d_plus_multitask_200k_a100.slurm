@@ -7,9 +7,8 @@
 # ^ TODO verify against `idrct_info`/your allocation notice before sbatch'ing:
 #   - account/hours pot: uhn@a100 (separate quota from the exhausted ppm@h100)
 #   - `-C a100` constraint name, and whether this partition also needs an
-#     explicit --qos= for a >20h job or a different --cpus-per-task ratio
-#     than the H100 nodes below (kept at 24 from the H100 script, unverified
-#     for A100).
+#     explicit --qos= for a >20h job (--cpus-per-task=8 below, confirmed
+#     lower than the H100 nodes' 24; module load arch/a100 confirmed too).
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -71,9 +70,7 @@ cp $0 ${JOB_DIR}/script.slurm
 } > ${JOB_DIR}/job_info.log
 
 module purge
-# TODO verify: A100 nodes on JZ typically don't need an `arch/*` module swap
-# (H100 needed `module load arch/h100` because it's the non-default arch) --
-# drop this line or replace it with the correct one per `module avail arch`.
+module load arch/a100
 module load cuda/12.1.0
 module load miniforge/24.9.0
 

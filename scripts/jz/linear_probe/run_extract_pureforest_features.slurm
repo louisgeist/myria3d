@@ -48,6 +48,7 @@ cp $0 ${JOB_DIR}/script.slurm
 } > ${JOB_DIR}/job_info.log
 
 module purge
+module load arch/a100
 module load cuda/12.1.0
 module load miniforge/24.9.0
 conda activate myria3d

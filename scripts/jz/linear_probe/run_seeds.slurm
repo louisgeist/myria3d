@@ -47,6 +47,7 @@ ln -sf ../${SLURM_JOB_ID}.err ${JOB_DIR}/${SLURM_JOB_ID}.err
 cp $0 ${JOB_DIR}/script.slurm
 
 module purge
+module load arch/a100
 module load cuda/12.1.0
 module load miniforge/24.9.0
 
