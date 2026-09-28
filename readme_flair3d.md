@@ -251,6 +251,16 @@ python tools/eval_network_apls.py \
   --out_dir /path/to/myria3d/logs/runs/YYYY-MM-DD/HH-MM-SS/result
 ```
 
+**Val/test use a 104/52 mosaic** (`eval_tile_width`/`eval_subtile_width` in
+`configs/datamodule/transforms/preparations/points_budget_flair3d_plus_multitask.yaml`; train
+crops stay 100/50). Pointcept patches are ~102.4 x 102.5 m and tile each ROI with no overlap; a
+100/50 mosaic only covers [0, 100] m from the patch's min corner, so the east/north ~2.5 m strip
+of every patch is never predicted nor scored (NaN -> background in the dump). The stitched ROI
+raster then has a cut every ~102 m, which collapses APLS G->G' (a perfect GT-as-prediction dump
+scores ~1 instead of ~48 on a test ROI) while dilated P/R and G'->G barely move. Test runs made
+before this change (100/50 eval) must be re-tested, e.g. with
+`scripts/jz/run_flair3d_plus_multitask_test_a100.slurm <ckpt>`.
+
 `--network_types ROADS` is required: myria3d (like current Pointcept configs) dumps a single roads channel (`C=1`), not railroads/transmission lines. Override dump dir / disable with `callbacks.pointcept_pred_dump.output_dir=...` or `callbacks.pointcept_pred_dump.enabled=false`.
 
 Per-task losses: `train/loss_segment`, `train/loss_forest_2d`, `train/loss_roads`, `train/loss_nathab_*`, …

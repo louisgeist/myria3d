@@ -18,19 +18,18 @@
 # Pointcept-format `result/{patch_id}_logits_{network,forest_2d}.npy` dumps for
 # Pointcept's tools/eval_network_apls.py.
 #
-# tile_width=104 / subtile_width=52: Pointcept patches are ~102.4 x 102.5 m (not 100 m)
-# and tile each ROI edge-to-edge with no overlap. The default 100/50 mosaic only covers
-# [0, 100] m from the patch's min corner, so the last ~2.5 m strip (east + north) of
-# every patch was never predicted -> NaN -> background in the stitched ROI raster -> a
-# grid of cuts every ~102 m that collapses APLS G->G' (perfect GT-as-prediction scored
-# 1.0 instead of 47.8 on D068-2021/UU-S1-2). 104/52 covers the full patch (still 4
-# quadrants), at the cost of eval crops slightly larger than the 50 m training crops.
+# The val/test mosaic is 104/52 by default (preparations eval_tile_width/eval_subtile_width,
+# see points_budget_flair3d_plus_multitask.yaml): Pointcept patches are ~102.4 x 102.5 m, and
+# the former 100/50 mosaic left the east/north ~2.5 m strip of every patch unpredicted ->
+# NaN cuts every ~102 m in the stitched ROI raster that collapsed APLS G->G' (perfect
+# GT-as-prediction scored 1.0 instead of 47.8 on D068-2021/UU-S1-2). Override with
+# EVAL_TILE_WIDTH / EVAL_SUBTILE_WIDTH (keep a 2:1 ratio -> 4 quadrants).
 #
 # Usage:
 #   sbatch run_flair3d_plus_multitask_test_a100.slurm /path/to/checkpoint.ckpt
 CKPT_PATH="${1:?usage: sbatch $0 /path/to/checkpoint.ckpt}"
-TILE_WIDTH="${TILE_WIDTH:-104}"
-SUBTILE_WIDTH="${SUBTILE_WIDTH:-52}"
+EVAL_TILE_WIDTH="${EVAL_TILE_WIDTH:-104}"
+EVAL_SUBTILE_WIDTH="${EVAL_SUBTILE_WIDTH:-52}"
 
 JOB_DIR=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs/slurm/${SLURM_JOB_ID}
 mkdir -p ${JOB_DIR}
@@ -47,7 +46,7 @@ cp $0 ${JOB_DIR}/script.slurm
     echo "Working directory: $(pwd)"
     echo "Python executable: $(which python)"
     echo "checkpoint: ${CKPT_PATH}"
-    echo "tile_width/subtile_width: ${TILE_WIDTH}/${SUBTILE_WIDTH}"
+    echo "eval tile_width/subtile_width: ${EVAL_TILE_WIDTH}/${EVAL_SUBTILE_WIDTH}"
     nvidia-smi
 } > ${JOB_DIR}/job_info.log
 
@@ -78,9 +77,9 @@ START_TIME=$(date +%s)
 srun python run.py experiment=flair3d_plus/multitask_200k \
   task.task_name=test \
   model.ckpt_path=${CKPT_PATH} \
-  datamodule.tile_width=${TILE_WIDTH} \
-  datamodule.subtile_width=${SUBTILE_WIDTH} \
-  logger.wandb.name=test_tw${TILE_WIDTH}_job${SLURM_JOB_ID} \
+  datamodule.transforms.preparations.eval_tile_width=${EVAL_TILE_WIDTH} \
+  datamodule.transforms.preparations.eval_subtile_width=${EVAL_SUBTILE_WIDTH} \
+  logger.wandb.name=test_tw${EVAL_TILE_WIDTH}_job${SLURM_JOB_ID} \
   logger.wandb.job_type=test \
   hydra.run.dir=${JOB_DIR}/hydra_run \
   '+trainer.plugins=[{_target_:pytorch_lightning.plugins.environments.SLURMEnvironment}]'

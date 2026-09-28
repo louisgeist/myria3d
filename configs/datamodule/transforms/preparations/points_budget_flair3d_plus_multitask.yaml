@@ -2,6 +2,16 @@
 # 50m to reproduce myria3d pipeline.
 voxel: 0.1
 
+# Val/test mosaic, deliberately larger than the train crop (datamodule.tile_width/
+# subtile_width = 100/50). Pointcept patches are ~102.4 x 102.5 m and tile each ROI with no
+# overlap; a 100/50 mosaic (anchored at the patch's min corner) leaves the east/north ~2.5 m
+# strip of every patch unpredicted and unscored -> NaN cuts every ~102 m in the stitched ROI
+# raster that collapse APLS G->G'. 104/52 still yields 4 quadrants (keep the same
+# tile/subtile ratio as the datamodule: it sizes the eval subtile_index range) and covers
+# the whole patch. See readme_flair3d.md (APLS).
+eval_tile_width: 104
+eval_subtile_width: 52
+
 # Per-point id/label keys that must survive voxel downsampling by point-picking, not
 # PyG's default mean-reduce (which silently float-casts them) -- see CategoricalGridSampling.
 nathab_categorical_keys:
@@ -56,8 +66,8 @@ train:
 eval:
   SubtileCrop:
     _target_: myria3d.pctl.transforms.transforms.SubtileCrop
-    tile_width: "${datamodule.tile_width}"
-    subtile_width: "${datamodule.subtile_width}"
+    tile_width: ${datamodule.transforms.preparations.eval_tile_width}
+    subtile_width: ${datamodule.transforms.preparations.eval_subtile_width}
     random: false
 
   DropPointsByClass:
