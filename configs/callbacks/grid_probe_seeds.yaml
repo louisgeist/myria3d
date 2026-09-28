@@ -1,22 +1,21 @@
 # Seed-phase (10 probes at the winning LR) callbacks for linear probing.
 
+# Monitors the mean of the actual select_metric across the 10 seed probes (all
+# sharing one LR), not val/loss -- see grid_probe_grid.yaml for why. No early
+# stopping: all 10 seeds must train for the same number of epochs to be a fair
+# ensemble, and cutting them short based on an aggregate val/loss plateau silently
+# under-trains the whole seed phase (observed on H3D 2026-09-28: the seed run
+# stopped at epoch 14 vs. 43 for the grid run at the same LR, tanking test scores).
 model_checkpoint:
   _target_: pytorch_lightning.callbacks.ModelCheckpoint
-  monitor: "val/loss"
-  mode: "min"
+  monitor: "val/probes_mean/${dataset_description.select_metric}"
+  mode: "max"
   save_top_k: 1
   save_last: True
   verbose: True
   dirpath: "checkpoints/"
   filename: "epoch_{epoch:03d}"
   auto_insert_metric_name: False
-
-early_stopping:
-  _target_: pytorch_lightning.callbacks.EarlyStopping
-  monitor: "val/loss"
-  mode: "min"
-  patience: 10
-  min_delta: 0
 
 grid_probe_metrics:
   _target_: myria3d.callbacks.grid_probe_callbacks.GridProbeMetrics

@@ -7,14 +7,15 @@ lr_monitor:
   logging_interval: "step"
 
 # Satisfies train.py's unconditional `trainer.checkpoint_callback.best_model_path`
-# access after fit -- monitors the aggregate (all-active-probes) val loss as a
-# resume-safety net, not the actual winner-selection metric (that's
-# grid_probe_winner_selector below, which is dataset_description.select_metric-driven
-# per the Pointcept convention: mIoU for DALES/ECLAIR, macro-F1 for H3D).
+# access after fit. Monitors the mean of the actual select_metric across all active
+# probes (grid_probe_metrics logs this as val/probes_mean/{select_metric}) rather than
+# val/loss, so the checkpoint reloaded for the automatic post-fit test actually
+# tracks the same signal grid_probe_winner_selector uses to pick the winner (mIoU for
+# DALES/ECLAIR, macro-F1 for H3D) instead of an unrelated aggregate loss.
 model_checkpoint:
   _target_: pytorch_lightning.callbacks.ModelCheckpoint
-  monitor: "val/loss"
-  mode: "min"
+  monitor: "val/probes_mean/${dataset_description.select_metric}"
+  mode: "max"
   save_top_k: 1
   save_last: True
   verbose: True
@@ -22,12 +23,12 @@ model_checkpoint:
   filename: "epoch_{epoch:03d}"
   auto_insert_metric_name: False
 
-early_stopping:
-  _target_: pytorch_lightning.callbacks.EarlyStopping
-  monitor: "val/loss"
-  mode: "min"
-  patience: 10
-  min_delta: 0
+# No early stopping here by design: the grid sweep must run to max_epochs so every
+# LR gets a fair, equal-length shot -- grid_probe_winner_selector already tracks each
+# probe's own running-best val select_metric independently and picks the winner at
+# on_fit_end, so there is nothing for early stopping to gain besides cutting some
+# arms short relative to others (see readme_linear_probing.md's LR-sweep collapse
+# investigation, 2026-09-28).
 
 grid_probe_metrics:
   _target_: myria3d.callbacks.grid_probe_callbacks.GridProbeMetrics

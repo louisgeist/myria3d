@@ -172,3 +172,6 @@ def test_grid_probe_metrics_logs_per_probe_tags(tmp_path):
         assert f"val/probe_{probe_name}/mIoU" in trainer.callback_metrics
         assert f"val/probe_{probe_name}/macro_f1" in trainer.callback_metrics
         assert f"val/probe_{probe_name}/acc" in trainer.callback_metrics
+    assert "val/probes_mean/mIoU" in trainer.callback_metrics
+    assert "val/probes_mean/macro_f1" in trainer.callback_metrics
+    assert "val/probes_mean/acc" in trainer.callback_metrics

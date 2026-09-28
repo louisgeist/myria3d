@@ -74,16 +74,30 @@ class GridProbeMetrics(Callback):
                 metric.to(preds.device)(preds, targets.to(preds.device))
 
     def _end_of_epoch(self, phase: str, pl_module) -> None:
+        per_tag_values: Dict[str, list] = {tag: [] for tag in _METRIC_TAGS.values()}
         for probe_name, metrics in self._metrics[phase].items():
             for metric_key, metric in metrics.items():
                 value = metric.to(pl_module.device).compute()
+                tag = _METRIC_TAGS[metric_key]
                 pl_module.log(
-                    f"{phase}/probe_{probe_name}/{_METRIC_TAGS[metric_key]}",
+                    f"{phase}/probe_{probe_name}/{tag}",
                     value,
                     on_epoch=True,
                     on_step=False,
                 )
+                per_tag_values[tag].append(value)
                 metric.reset()
+        # Mean across all active probes -- gives ModelCheckpoint/EarlyStopping a
+        # single well-defined validation signal (the actual select_metric, not
+        # val/loss) even though each probe otherwise only logs its own key.
+        for tag, values in per_tag_values.items():
+            if values:
+                pl_module.log(
+                    f"{phase}/probes_mean/{tag}",
+                    torch.stack(values).mean(),
+                    on_epoch=True,
+                    on_step=False,
+                )
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self._end_of_batch("train", outputs)
