@@ -12,8 +12,12 @@
 #SBATCH --hint=nomultithread
 
 #SBATCH --job-name=myria3d-mt-test
-#SBATCH --time=10:00:00
+#SBATCH --time=19:45:00
 
+# Full 104/52 test pass takes ~10h15 on 1 A100 (5872 batches @ ~0.14 it/s; job 274440 was
+# killed by a 10h limit at 5684/5872, and since metrics + Pointcept dumps are only written
+# at the end of the test epoch, that run left nothing behind).
+#
 # Test-only pass of a Flair3D+ multitask checkpoint (full test split), writing the
 # Pointcept-format `result/{patch_id}_logits_{network,forest_2d}.npy` dumps for
 # Pointcept's tools/eval_network_apls.py.
@@ -30,6 +34,7 @@
 CKPT_PATH="${1:?usage: sbatch $0 /path/to/checkpoint.ckpt}"
 EVAL_TILE_WIDTH="${EVAL_TILE_WIDTH:-104}"
 EVAL_SUBTILE_WIDTH="${EVAL_SUBTILE_WIDTH:-52}"
+NUM_WORKERS="${NUM_WORKERS:-8}"
 
 JOB_DIR=/lustre/fswork/projects/rech/unv/usi32yh/myria3d/logs/slurm/${SLURM_JOB_ID}
 mkdir -p ${JOB_DIR}
@@ -47,6 +52,7 @@ cp $0 ${JOB_DIR}/script.slurm
     echo "Python executable: $(which python)"
     echo "checkpoint: ${CKPT_PATH}"
     echo "eval tile_width/subtile_width: ${EVAL_TILE_WIDTH}/${EVAL_SUBTILE_WIDTH}"
+    echo "num_workers: ${NUM_WORKERS}"
     nvidia-smi
 } > ${JOB_DIR}/job_info.log
 
@@ -79,6 +85,7 @@ srun python run.py experiment=flair3d_plus/multitask_200k \
   model.ckpt_path=${CKPT_PATH} \
   datamodule.transforms.preparations.eval_tile_width=${EVAL_TILE_WIDTH} \
   datamodule.transforms.preparations.eval_subtile_width=${EVAL_SUBTILE_WIDTH} \
+  datamodule.num_workers=${NUM_WORKERS} \
   logger.wandb.name=test_tw${EVAL_TILE_WIDTH}_job${SLURM_JOB_ID} \
   logger.wandb.job_type=test \
   hydra.run.dir=${JOB_DIR}/hydra_run \
