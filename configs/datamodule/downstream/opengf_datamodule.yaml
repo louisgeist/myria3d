@@ -1,0 +1,43 @@
+_target_: myria3d.pctl.datamodule.downstream.DownstreamNpyDatamodule
+
+data_root: ${oc.env:DOWNSTREAM_DATA_ROOT,/data/geist/Pointcept/data}/opengf
+dataset_target: myria3d.pctl.dataset.downstream.opengf.OpenGFDataset
+
+train_dir: train
+val_dir: val
+test_dir: test
+
+# Pointcept's preprocess_opengf.py splits every raw tile into ~166.67 m chunks (500/3
+# on Training/Validation's uniform 500 m tiles; Test's larger irregular regions are cut
+# to the same physical size), i.e. the same footprint as DALES' chunking=3 -- hence the
+# same tile_width margin. subtile_width=50 is the Flair3D+ pretraining scale; override
+# it from the CLI (`datamodule.subtile_width=...`) to probe a larger context.
+tile_width: 170
+subtile_width: 50
+
+# Label handling reproduces Pointcept's OpenGF configs (Qin et al., CVPRW 2021).
+# On disk: 0 = Ground, 1 = Non-ground, 2 = Outlier.
+#  - train/val: outliers are merged into Non-ground (paper Sec 4.4).
+#  - test: "Test II (w/o outliers)" (paper Sec 4.5) -- scene T2 only (the only test
+#    region with outliers), outliers physically deleted from the cloud *before* the
+#    crop/voxel steps, so they are not even geometric context for their neighbours.
+train_dataset_kwargs:
+  remap_labels: {2: 1}
+val_dataset_kwargs:
+  remap_labels: {2: 1}
+test_dataset_kwargs:
+  include_names: T2
+  drop_labels: [2]
+
+pre_filter:
+  _target_: functools.partial
+  _args_:
+    - "${get_method:myria3d.pctl.dataset.utils.pre_filter_below_n_points}"
+  min_num_nodes: 1
+
+batch_size: 12
+num_workers: 4
+prefetch_factor: 2
+
+defaults:
+  - transforms: downstream.yaml

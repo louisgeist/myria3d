@@ -84,3 +84,68 @@ def test_dales_datamodule_end_to_end_batches(tmp_path):
     assert len(dm.test_dataset) == 4
     test_batch = next(iter(test_loader))
     assert test_batch is not None
+
+
+def _write_labeled_scene(root, split, name, segment, n=400):
+    scene_dir = _write_scene(root, split, name, n=n)
+    np.save(os.path.join(scene_dir, "segment.npy"), np.asarray(segment, dtype=np.int32))
+    return scene_dir
+
+
+def test_opengf_datamodule_applies_dataset_kwargs_per_split(tmp_path):
+    rng = np.random.default_rng(0)
+    seg_with_outliers = rng.integers(0, 3, size=400)
+    assert (seg_with_outliers == 2).any()
+    for split in ("train", "val"):
+        _write_labeled_scene(str(tmp_path), split, "S1_1_0-0", seg_with_outliers)
+    _write_labeled_scene(str(tmp_path), "test", "T1_0-0", seg_with_outliers)
+    _write_labeled_scene(str(tmp_path), "test", "T2_0-0", seg_with_outliers)
+
+    dm = DownstreamNpyDatamodule(
+        data_root=str(tmp_path),
+        dataset_target="myria3d.pctl.dataset.downstream.opengf.OpenGFDataset",
+        tile_width=100,
+        subtile_width=50,
+        batch_size=1,
+        num_workers=0,
+        transforms=_transforms_dict(),
+        train_dataset_kwargs={"remap_labels": {2: 1}},
+        val_dataset_kwargs={"remap_labels": {2: 1}},
+        test_dataset_kwargs={"include_names": "T2", "drop_labels": [2]},
+    )
+    dm.setup()
+
+    # Train / val: outliers merged into Non-ground -> only labels {0, 1} remain.
+    for dataset in (dm.train_dataset, dm.val_dataset):
+        labels = set(dataset[0].y.tolist()) if dataset[0] is not None else set()
+        assert labels <= {0, 1}
+    # Test: T2 only (4 mosaic subtiles for a single 100 m / 50 m tile), outliers deleted.
+    assert {os.path.basename(d) for d, _ in dm.test_dataset.entries} == {"T2_0-0"}
+    assert len(dm.test_dataset) == 4
+    test_labels = set()
+    for i in range(len(dm.test_dataset)):
+        item = dm.test_dataset[i]
+        if item is not None:
+            test_labels |= set(item.y.tolist())
+    assert test_labels <= {0, 1}
+    assert dm.test_dataset.drop_labels == [2]
+    assert dm.train_dataset.drop_labels is None
+
+
+def test_common_dataset_kwargs_still_apply_to_every_split(tmp_path):
+    _write_scene(str(tmp_path), "train", "a")
+    _write_scene(str(tmp_path), "test", "b")
+
+    dm = DownstreamNpyDatamodule(
+        data_root=str(tmp_path),
+        dataset_target="myria3d.pctl.dataset.downstream.dales.DalesDataset",
+        val_dir="test",
+        tile_width=100,
+        subtile_width=50,
+        num_workers=0,
+        transforms=_transforms_dict(),
+        dataset_kwargs={"label_key": "segment"},
+    )
+
+    for dataset in (dm.train_dataset, dm.val_dataset, dm.test_dataset):
+        assert dataset.label_key == "segment"

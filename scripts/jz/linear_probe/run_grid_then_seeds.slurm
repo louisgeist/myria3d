@@ -31,15 +31,15 @@
 # python-side JSON writes agree on the same location.
 #
 # Usage:
-#   sbatch run_grid_then_seeds.slurm <dales|h3d|eclair>
+#   sbatch run_grid_then_seeds.slurm <dales|h3d|eclair|opengf>
 # Env overrides:
 #   WEIGHT               path to the pretrained Flair3D+ multitask checkpoint (required)
-#   DOWNSTREAM_DATA_ROOT root dir containing dales/h3d/eclair preprocessed subfolders
+#   DOWNSTREAM_DATA_ROOT root dir containing dales/h3d/eclair/opengf preprocessed subfolders
 #   N_SEEDS               number of seed heads (default 10)
-DATASET="${1:?Usage: sbatch run_grid_then_seeds.slurm <dales|h3d|eclair>}"
+DATASET="${1:?Usage: sbatch run_grid_then_seeds.slurm <dales|h3d|eclair|opengf>}"
 case "$DATASET" in
-  dales|h3d|eclair) ;;
-  *) echo "Unknown dataset '${DATASET}', expected dales|h3d|eclair" >&2; exit 1 ;;
+  dales|h3d|eclair|opengf) ;;
+  *) echo "Unknown dataset '${DATASET}', expected dales|h3d|eclair|opengf" >&2; exit 1 ;;
 esac
 N_SEEDS="${N_SEEDS:-10}"
 

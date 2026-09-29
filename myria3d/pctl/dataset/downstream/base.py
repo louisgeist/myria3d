@@ -13,7 +13,7 @@ from __future__ import annotations
 import glob
 import os.path as osp
 from numbers import Number
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -38,6 +38,27 @@ def list_scene_dirs(data_root: str, split_dir: str) -> List[str]:
     """List Pointcept-preprocessed scene folders under ``{data_root}/{split_dir}/*/``."""
     pattern = osp.join(data_root, split_dir, "*")
     return sorted(d for d in glob.glob(pattern) if osp.isdir(d))
+
+
+def filter_scene_dirs_by_name(
+    scene_dirs: Sequence[str], include_names: Union[str, Sequence[str], None]
+) -> List[str]:
+    """Keep scene folders whose name is one of ``include_names`` or starts with
+    ``"{name}_"`` (so ``"T2"`` matches ``T2_0-0`` but neither ``T1_0-0`` nor ``T20_0-0``).
+    ``None`` keeps everything.
+    """
+    if include_names is None:
+        return list(scene_dirs)
+    names = [include_names] if isinstance(include_names, str) else list(include_names)
+    return [
+        d
+        for d in scene_dirs
+        if any(
+            osp.basename(osp.normpath(d)) == name
+            or osp.basename(osp.normpath(d)).startswith(f"{name}_")
+            for name in names
+        )
+    ]
 
 
 def build_scene_entries(
@@ -94,14 +115,29 @@ def _build_feature_matrix(
     return np.stack([intensity, red, green, blue, rgb_avg], axis=1).astype(np.float32, copy=False)
 
 
+def _remap_labels(y: np.ndarray, mapping: Mapping[int, int]) -> np.ndarray:
+    remapped = y.copy()
+    for source, target in mapping.items():
+        remapped[y == int(source)] = int(target)
+    return remapped
+
+
 def load_downstream_scene(
     scene_dir: str,
     *,
     has_color: bool,
     has_strength: bool,
     label_key: str = "segment",
+    remap_labels: Optional[Mapping[int, int]] = None,
+    drop_labels: Optional[Sequence[int]] = None,
 ) -> Data:
     """Load one Pointcept-preprocessed downstream scene folder into a PyG `Data`.
+
+    ``remap_labels`` (e.g. ``{2: 1}``) rewrites labels in place, keeping every point.
+    ``drop_labels`` (e.g. ``[2]``) physically removes those points from every per-point
+    attribute (applied after the remap, using the remapped labels) -- unlike an
+    ``ignore_index`` this also removes them as geometric context for their neighbours.
+    ``idx_in_original_cloud`` keeps pointing at the surviving points' original rows.
 
     ``has_color``/``has_strength`` describe whether the *dataset as a whole* carries
     that modality (DALES has no color, H3D has no intensity) -- when a modality is
@@ -132,22 +168,38 @@ def load_downstream_scene(
 
     x = _build_feature_matrix(color, strength, num_points, has_color, has_strength)
 
+    y = None
+    label_path = osp.join(scene_dir, f"{label_key}.npy")
+    if osp.isfile(label_path):
+        # Pointcept's own preprocessing already remapped labels to contiguous train
+        # ids -- only the explicit, opt-in remap_labels/drop_labels below alter them.
+        y = np.load(label_path).reshape(-1).astype(np.int64, copy=False)
+
+    idx_in_original_cloud = np.arange(num_points, dtype=np.int32)
+    if y is not None:
+        if remap_labels:
+            y = _remap_labels(y, remap_labels)
+        if drop_labels:
+            keep = ~np.isin(y, list(drop_labels))
+            pos, x, y, idx_in_original_cloud = (
+                pos[keep],
+                x[keep],
+                y[keep],
+                idx_in_original_cloud[keep],
+            )
+            num_points = pos.shape[0]
+
     kwargs = dict(
         pos=torch.from_numpy(pos),
         x=torch.from_numpy(x),
         x_features_names=list(X_FEATURE_NAMES),
-        idx_in_original_cloud=np.arange(num_points, dtype=np.int32),
+        idx_in_original_cloud=idx_in_original_cloud,
     )
     if not has_color:
         kwargs["color_mask"] = torch.ones(num_points, dtype=torch.bool)
     if not has_strength:
         kwargs["strength_mask"] = torch.ones(num_points, dtype=torch.bool)
-
-    label_path = osp.join(scene_dir, f"{label_key}.npy")
-    if osp.isfile(label_path):
-        # Pointcept's own preprocessing already remapped labels to contiguous train
-        # ids -- no remapping here (mirrors pointcept_npy.py's segment.npy handling).
-        y = np.load(label_path).reshape(-1).astype(np.int64, copy=False)
+    if y is not None:
         kwargs["y"] = torch.from_numpy(y)
 
     return Data(**kwargs)
@@ -170,14 +222,24 @@ class DownstreamNpyDataset(Dataset):
         pre_filter: Optional[Callable[[Data], bool]] = pre_filter_below_n_points,
         transform: Optional[Callable] = None,
         scene_dirs: Optional[Sequence[str]] = None,
+        include_names: Union[str, Sequence[str], None] = None,
+        remap_labels: Optional[Mapping[int, int]] = None,
+        drop_labels: Optional[Sequence[int]] = None,
     ):
         self.data_root = data_root
         self.split_dir = split_dir
         self.has_color = has_color
         self.has_strength = has_strength
         self.label_key = label_key
+        self.remap_labels = remap_labels
+        self.drop_labels = drop_labels
         self.pre_filter = pre_filter
         self.transform = transform
+        if include_names is not None:
+            all_dirs = (
+                scene_dirs if scene_dirs is not None else list_scene_dirs(data_root, split_dir)
+            )
+            scene_dirs = filter_scene_dirs_by_name(all_dirs, include_names)
         self.entries: List[SceneEntry] = build_scene_entries(
             data_root,
             split_dir,
@@ -202,6 +264,8 @@ class DownstreamNpyDataset(Dataset):
             has_color=self.has_color,
             has_strength=self.has_strength,
             label_key=self.label_key,
+            remap_labels=self.remap_labels,
+            drop_labels=self.drop_labels,
         )
         patch_id = osp.basename(osp.normpath(scene_dir))
         data.patch_id = patch_id

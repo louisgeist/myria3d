@@ -47,6 +47,9 @@ class DownstreamNpyDatamodule(LightningDataModule):
         prefetch_factor: int = 2,
         transforms: Optional[Dict[str, TRANSFORMS_LIST]] = None,
         dataset_kwargs: Optional[dict] = None,
+        train_dataset_kwargs: Optional[dict] = None,
+        val_dataset_kwargs: Optional[dict] = None,
+        test_dataset_kwargs: Optional[dict] = None,
         **kwargs,
     ):
         super().__init__()
@@ -62,7 +65,15 @@ class DownstreamNpyDatamodule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
+        # `dataset_kwargs` apply to every split; the per-split ones are merged over them
+        # (e.g. OpenGF: outliers merged into Non-ground for train/val, but dropped -- and
+        # only on scene T2 -- for test).
         self.dataset_kwargs = dict(dataset_kwargs or {})
+        self.split_dataset_kwargs = {
+            "train": dict(train_dataset_kwargs or {}),
+            "val": dict(val_dataset_kwargs or {}),
+            "test": dict(test_dataset_kwargs or {}),
+        }
 
         t = transforms or {}
         self.preparation_train_transform: TRANSFORMS_LIST = t.get("preparations_train_list", [])
@@ -86,7 +97,7 @@ class DownstreamNpyDatamodule(LightningDataModule):
     def eval_transform(self) -> CustomCompose:
         return CustomCompose(self.preparation_eval_transform + self.normalization_transform)
 
-    def _build_dataset(self, split_dir: str, is_eval: bool) -> DownstreamNpyDataset:
+    def _build_dataset(self, split_dir: str, is_eval: bool, split: str) -> DownstreamNpyDataset:
         return self.dataset_class(
             data_root=self.data_root,
             split_dir=split_dir,
@@ -96,7 +107,7 @@ class DownstreamNpyDatamodule(LightningDataModule):
             subtile_overlap=self.subtile_overlap,
             pre_filter=self.pre_filter,
             transform=self.eval_transform if is_eval else self.train_transform,
-            **self.dataset_kwargs,
+            **{**self.dataset_kwargs, **self.split_dataset_kwargs[split]},
         )
 
     def setup(self, stage: Optional[str] = None) -> None:
@@ -107,19 +118,19 @@ class DownstreamNpyDatamodule(LightningDataModule):
     @property
     def train_dataset(self) -> DownstreamNpyDataset:
         if self._train_dataset is None:
-            self._train_dataset = self._build_dataset(self.train_dir, is_eval=False)
+            self._train_dataset = self._build_dataset(self.train_dir, is_eval=False, split="train")
         return self._train_dataset
 
     @property
     def val_dataset(self) -> DownstreamNpyDataset:
         if self._val_dataset is None:
-            self._val_dataset = self._build_dataset(self.val_dir, is_eval=True)
+            self._val_dataset = self._build_dataset(self.val_dir, is_eval=True, split="val")
         return self._val_dataset
 
     @property
     def test_dataset(self) -> DownstreamNpyDataset:
         if self._test_dataset is None:
-            self._test_dataset = self._build_dataset(self.test_dir, is_eval=True)
+            self._test_dataset = self._build_dataset(self.test_dir, is_eval=True, split="test")
         return self._test_dataset
 
     def train_dataloader(self):

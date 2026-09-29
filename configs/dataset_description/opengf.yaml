@@ -1,0 +1,23 @@
+_conc_convert_: all
+
+# OpenGF (ground filtering), Pointcept preprocessing -- see pointcept/datasets/opengf.py.
+# Binary task. On-disk segment.npy also carries a raw label 2 (Outlier); the datamodule
+# merges it into Non-ground for train/val and deletes it for the test (Test II w/o
+# outliers), so the model only ever sees / predicts these two classes -- see
+# configs/datamodule/downstream/opengf_datamodule.yaml.
+classification_dict:
+  0: "Ground"
+  1: "Non-ground"
+
+# Class names in class-id order -- used by callbacks.grid_probe_metrics to log per-class
+# IoU (val/probe_*/iou_ground, iou_non_ground). An explicit list rather than
+# `oc.dict.values` on classification_dict, whose integer keys OmegaConf can't resolve.
+class_names: ["Ground", "Non-ground"]
+
+num_classes: 2
+# No void class: nothing ignored (null, not an out-of-range sentinel -- see eclair.yaml).
+ignore_index: null
+
+# Winner-selection metric for GridProbeWinnerSelector. iou_ground is logged alongside
+# (callbacks.grid_probe_metrics.class_names) but is not the selection criterion.
+select_metric: mIoU

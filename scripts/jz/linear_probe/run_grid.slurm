@@ -21,13 +21,13 @@
 # See readme_linear_probing.md and run_grid_then_seeds.slurm for the full protocol.
 #
 # Usage:
-#   sbatch run_grid.slurm <dataset>          # dataset in {dales, h3d, eclair}
+#   sbatch run_grid.slurm <dataset>          # dataset in {dales, h3d, eclair, opengf}
 #   sbatch run_grid.slurm dales
 #
 # Env var overrides (export before sbatch, or edit here):
 #   WEIGHT               path to the Flair3D+ multitask checkpoint being probed
-#   DOWNSTREAM_DATA_ROOT parent dir of dales/h3d/eclair Pointcept-preprocessed data
-DATASET="${1:?Usage: sbatch run_grid.slurm <dales|h3d|eclair>}"
+#   DOWNSTREAM_DATA_ROOT parent dir of dales/h3d/eclair/opengf Pointcept-preprocessed data
+DATASET="${1:?Usage: sbatch run_grid.slurm <dales|h3d|eclair|opengf>}"
 WEIGHT="${WEIGHT:?Set WEIGHT=/path/to/flair3d_plus_multitask.ckpt (export before sbatch)}"
 DOWNSTREAM_DATA_ROOT="${DOWNSTREAM_DATA_ROOT:-/lustre/fsn1/projects/rech/unv/usi32yh/data_pointcept}"
 

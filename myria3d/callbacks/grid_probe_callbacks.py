@@ -12,7 +12,8 @@ from __future__ import annotations
 import csv
 import json
 import os.path as osp
-from typing import Dict, Optional
+import re
+from typing import Dict, Optional, Sequence
 
 import torch
 from pytorch_lightning import Callback
@@ -27,16 +28,41 @@ _PHASES = ("train", "val", "test")
 _METRIC_TAGS = {"iou": "mIoU", "f1": "macro_f1", "acc": "acc"}
 
 
+def _class_iou_tag(class_name: str) -> str:
+    """``"Non-ground"`` -> ``"iou_non_ground"``."""
+    return "iou_" + re.sub(r"[^0-9a-z]+", "_", class_name.lower()).strip("_")
+
+
 class GridProbeMetrics(Callback):
     """Per-probe mIoU / macro-F1 / accuracy, logged as ``{phase}/probe_{name}/{tag}``.
 
     Probe names aren't known until `GridProbeModel` is instantiated, so per-probe
     `torchmetrics` objects are created lazily on first use rather than upfront.
+
+    When ``class_names`` (one name per class id) is given, the per-class IoU is also
+    logged as ``{phase}/probe_{name}/iou_{class}`` (e.g. ``iou_ground``) and averaged
+    over probes as ``{phase}/probes_mean/iou_{class}``; the ``ignore_index`` class, if
+    any, is skipped. Off by default (``None``): existing datasets log the three
+    aggregate metrics only.
     """
 
-    def __init__(self, num_classes: int, ignore_index: Optional[int] = None):
+    def __init__(
+        self,
+        num_classes: int,
+        ignore_index: Optional[int] = None,
+        class_names: Optional[Sequence[str]] = None,
+    ):
         self.num_classes = num_classes
         self.ignore_index = ignore_index
+        if class_names is not None and len(class_names) != num_classes:
+            raise ValueError(
+                f"class_names has {len(class_names)} entries but num_classes={num_classes}"
+            )
+        self.class_iou_tags: Dict[int, str] = {
+            class_id: _class_iou_tag(name)
+            for class_id, name in enumerate(class_names or [])
+            if class_id != ignore_index
+        }
         self._metrics: Dict[str, Dict[str, dict]] = {phase: {} for phase in _PHASES}
 
     def _metrics_for(self, phase: str, probe_name: str) -> dict:
@@ -62,6 +88,13 @@ class GridProbeMetrics(Callback):
                     ignore_index=self.ignore_index,
                 ),
             }
+            if self.class_iou_tags:
+                probes[probe_name]["class_iou"] = JaccardIndex(
+                    task="multiclass",
+                    num_classes=self.num_classes,
+                    average="none",
+                    ignore_index=self.ignore_index,
+                )
         return probes[probe_name]
 
     def _end_of_batch(self, phase: str, outputs: dict) -> None:
@@ -75,17 +108,24 @@ class GridProbeMetrics(Callback):
 
     def _end_of_epoch(self, phase: str, pl_module) -> None:
         per_tag_values: Dict[str, list] = {tag: [] for tag in _METRIC_TAGS.values()}
+        per_tag_values.update({tag: [] for tag in self.class_iou_tags.values()})
         for probe_name, metrics in self._metrics[phase].items():
             for metric_key, metric in metrics.items():
                 value = metric.to(pl_module.device).compute()
-                tag = _METRIC_TAGS[metric_key]
-                pl_module.log(
-                    f"{phase}/probe_{probe_name}/{tag}",
-                    value,
-                    on_epoch=True,
-                    on_step=False,
-                )
-                per_tag_values[tag].append(value)
+                if metric_key == "class_iou":
+                    named_values = {
+                        tag: value[class_id] for class_id, tag in self.class_iou_tags.items()
+                    }
+                else:
+                    named_values = {_METRIC_TAGS[metric_key]: value}
+                for tag, tag_value in named_values.items():
+                    pl_module.log(
+                        f"{phase}/probe_{probe_name}/{tag}",
+                        tag_value,
+                        on_epoch=True,
+                        on_step=False,
+                    )
+                    per_tag_values[tag].append(tag_value)
                 metric.reset()
         # Mean across all active probes -- gives ModelCheckpoint/EarlyStopping a
         # single well-defined validation signal (the actual select_metric, not
@@ -211,8 +251,13 @@ class GridProbeSeedEnsembleTester(Callback):
         per_seed: Dict[str, Dict[str, float]] = {}
         for probe_name in pl_module.probe_names:
             entry = {}
-            for tag in _METRIC_TAGS.values():
-                key = f"test/probe_{probe_name}/{tag}"
+            prefix = f"test/probe_{probe_name}/"
+            # Aggregate tags plus any per-class ``iou_*`` GridProbeMetrics logged.
+            tags = list(_METRIC_TAGS.values()) + sorted(
+                key[len(prefix) :] for key in metrics if key.startswith(prefix + "iou_")
+            )
+            for tag in tags:
+                key = f"{prefix}{tag}"
                 if key in metrics:
                     entry[tag] = float(metrics[key])
             if entry:
@@ -224,7 +269,8 @@ class GridProbeSeedEnsembleTester(Callback):
             return
 
         aggregate: Dict[str, Dict[str, float]] = {}
-        for tag in _METRIC_TAGS.values():
+        all_tags = list(dict.fromkeys(tag for entry in per_seed.values() for tag in entry))
+        for tag in all_tags:
             values = [entry[tag] for entry in per_seed.values() if tag in entry]
             if not values:
                 continue

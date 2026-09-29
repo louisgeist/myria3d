@@ -2,8 +2,9 @@
 
 Evaluates the quality of a trained Flair3D+ multitask backbone (`experiment=flair3d_plus/multitask`,
 `PyGRandLANetMultiTask`) via **linear probing (LP)** on four downstream datasets already used for
-the same purpose in the sibling Pointcept repo (`/data/geist/Pointcept`): **DALES, H3D, ECLAIR**
-(per-point semantic segmentation) and **PureForest** (per-tile species classification). The
+the same purpose in the sibling Pointcept repo (`/data/geist/Pointcept`): **DALES, H3D, ECLAIR, OpenGF**
+(per-point segmentation; OpenGF is binary ground filtering) and **PureForest** (per-tile
+species classification). The
 protocol and dataset definitions/splits/exclusions reproduce Pointcept's own linear-probing setup
 (`pointcept/models/grid_probe.py`, `tools/grid_then_seeds.py`) as closely as the two backbones'
 architectures allow — see the per-component docstrings for exactly where and why they diverge.
@@ -17,7 +18,7 @@ Everything below assumes you already have a Flair3D+ multitask checkpoint (`Mult
 ## Protocol
 
 Two-phase **sweep-LR-then-10-seeds** evaluation, run natively as myria3d Hydra code for
-DALES/H3D/ECLAIR (not external orchestration scripts calling `run.py` repeatedly):
+DALES/H3D/ECLAIR/OpenGF (not external orchestration scripts calling `run.py` repeatedly):
 
 1. **Grid phase**: `GridProbeModel` trains 12 independent linear heads ("probes") sharing one
    frozen-backbone forward pass per step, one optimizer per probe, one shared `manual_backward()`
@@ -38,6 +39,7 @@ Winner selection metric is dataset-specific, matching Pointcept exactly:
 | DALES  | mIoU     | 9  (incl. `Unclassified`) | 8    | **none — mirrors test** |
 | H3D    | macro-F1 | 12 (incl. `Void`)         | 11   | yes |
 | ECLAIR | mIoU     | 11 (no void class)        | null | yes |
+| OpenGF | mIoU     | 2 (Ground / Non-ground)   | null | yes (9 scenes) |
 
 **DALES has no val split upstream** (Pointcept's own DALES preprocessing only ever writes
 `train`/`test`): `configs/datamodule/downstream/dales_datamodule.yaml` sets `val_dir: test`, i.e.
@@ -59,11 +61,54 @@ No Hydra multirun/sweeper plugin is used: the LR sweep happens by construction i
 
 ---
 
+### OpenGF (ground filtering)
+
+Binary task (`0=Ground`, `1=Non-ground`) on the OpenGF benchmark (Qin et al., CVPRW 2021),
+read from the Pointcept-preprocessed `.npy` scenes (`{DOWNSTREAM_DATA_ROOT}/opengf/{train,val,test}`,
+~166.67 m chunks produced by `preprocess_opengf.py` -- 1359 / 81 / 403 scenes). There is no
+color (the LAS RGB fields are a constant dummy, so `color_mask` is all-True like DALES); intensity
+is real. Intensity scales differ a lot between scenes (tens for S6, up to 65 535 for T2), which the
+standard `log` + per-sample standardization of `StandardizeRGBAndIntensity` absorbs -- no fixed
+`1/60000` constant as in Pointcept.
+
+The on-disk `segment.npy` carries a third raw label `2 = Outlier`. Handling **reproduces Pointcept's
+OpenGF configs** (paper Sec 4.4/4.5), set per split in `configs/datamodule/downstream/opengf_datamodule.yaml`:
+
+- **train / val**: outliers merged into Non-ground (`remap_labels: {2: 1}`), i.e. they take part in
+  training and in val model selection.
+- **test = "Test II w/o outliers"**: scene `T2` only (`include_names: T2` -- the only test region with
+  outliers; T1/T3 are not evaluated) and outliers **physically deleted** from the cloud
+  (`drop_labels: [2]`) *before* the crop/voxel steps, so they are not even geometric context for
+  their neighbours (unlike an `ignore_index`).
+
+These are generic, opt-in `DownstreamNpyDataset` options (`include_names`, `remap_labels`,
+`drop_labels`), set per split via the datamodule's `{train,val,test}_dataset_kwargs`.
+
+The LR winner is picked on val **mIoU**; the per-class IoU is logged too
+(`{phase}/probe_*/iou_ground`, `iou_non_ground`, plus `probes_mean/`), and aggregated over the seeds in
+`seed_ensemble_results.json` / `grid_then_seeds_summary.csv` (`iou_ground_mean`, `iou_ground_std`, ...).
+This per-class logging is opt-in (`callbacks.grid_probe_metrics.class_names`, set from
+`dataset_description.class_names`); the other datasets only log mIoU / macro-F1 / accuracy.
+
+```bash
+python run.py experiment=linear_probe/opengf_grid
+sbatch scripts/jz/linear_probe/run_grid_then_seeds.slurm opengf
+```
+
+**Caveat -- 50 m crops.** `subtile_width: 50` (the Flair3D+ pretraining scale, `NormalizePos` and the
+40k-point budget assume it) cuts each ~167 m chunk into a 4x4 mosaic. Ground filtering leans on
+large-scale context (ground under a big roof, terrain continuity), and points near a crop edge lose
+their neighbours, so the numbers are **not strictly comparable** with Pointcept's whole-chunk
+evaluation (up to 102 400 points per scene). A larger context can be tried with
+`datamodule.subtile_width=...` (not validated).
+
+---
+
 ## Environment
 
 ```bash
 export FLAIR3D_CKPT_PATH=/path/to/flair3d_plus_multitask.ckpt   # the checkpoint being probed
-export DOWNSTREAM_DATA_ROOT=/data/geist/Pointcept/data           # parent of dales/h3d/eclair/pureforest
+export DOWNSTREAM_DATA_ROOT=/data/geist/Pointcept/data           # parent of dales/h3d/eclair/opengf/pureforest
 ```
 
 mirrors the `FLAIR3D_DATA_ROOT`/`FLAIR3D_CSV_MANIFEST` pattern from `readme_flair3d.md`. On Jean
@@ -236,7 +281,7 @@ point-budget/normalization transforms run.
 |---|---|
 | Encoder-stage extraction | `myria3d/models/modules/pyg_randla_net_multitask.py::_forward_encoder_stages` |
 | Hypercolumn concat | `myria3d/models/modules/hypercolumn.py` |
-| Downstream datasets | `myria3d/pctl/dataset/downstream/{base,dales,h3d,eclair}.py` |
+| Downstream datasets | `myria3d/pctl/dataset/downstream/{base,dales,h3d,eclair,opengf}.py` |
 | Downstream datamodule | `myria3d/pctl/datamodule/downstream.py` |
 | LP LightningModule | `myria3d/models/grid_probe_model.py` (`GridProbeModel`, `load_frozen_backbone`) |
 | LP callbacks | `myria3d/callbacks/grid_probe_callbacks.py` |

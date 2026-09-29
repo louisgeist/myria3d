@@ -175,3 +175,93 @@ def test_grid_probe_metrics_logs_per_probe_tags(tmp_path):
     assert "val/probes_mean/mIoU" in trainer.callback_metrics
     assert "val/probes_mean/macro_f1" in trainer.callback_metrics
     assert "val/probes_mean/acc" in trainer.callback_metrics
+
+
+CLASS_NAMES = ["Ground", "Non-ground", "Vegetation", "Other stuff"]
+
+
+def test_grid_probe_metrics_logs_per_class_iou_when_class_names_given(tmp_path):
+    ckpt_path = _make_fake_checkpoint(tmp_path)
+    model = _make_model(ckpt_path, probe_lrs=[1e-2, 1e-1])
+    metrics_cb = GridProbeMetrics(num_classes=NUM_CLASSES, class_names=CLASS_NAMES)
+
+    trainer = pl.Trainer(
+        accelerator="cpu",
+        devices=1,
+        max_epochs=1,
+        limit_train_batches=1,
+        limit_val_batches=1,
+        num_sanity_val_steps=0,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        callbacks=[metrics_cb],
+    )
+    trainer.fit(model, train_dataloaders=_make_loader(1), val_dataloaders=_make_loader(1))
+
+    for probe_name in model.probe_names:
+        for tag in ("iou_ground", "iou_non_ground", "iou_vegetation", "iou_other_stuff"):
+            assert f"val/probe_{probe_name}/{tag}" in trainer.callback_metrics
+    assert "val/probes_mean/iou_ground" in trainer.callback_metrics
+    # Ground IoU is one class of the macro mean: bounded by [0, 1].
+    assert 0.0 <= float(trainer.callback_metrics["val/probes_mean/iou_ground"]) <= 1.0
+
+
+def test_grid_probe_metrics_logs_no_per_class_iou_by_default(tmp_path):
+    ckpt_path = _make_fake_checkpoint(tmp_path)
+    model = _make_model(ckpt_path, probe_lrs=[1e-1])
+    metrics_cb = GridProbeMetrics(num_classes=NUM_CLASSES)
+
+    trainer = pl.Trainer(
+        accelerator="cpu",
+        devices=1,
+        max_epochs=1,
+        limit_train_batches=1,
+        limit_val_batches=1,
+        num_sanity_val_steps=0,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        callbacks=[metrics_cb],
+    )
+    trainer.fit(model, train_dataloaders=_make_loader(1), val_dataloaders=_make_loader(1))
+
+    assert not [key for key in trainer.callback_metrics if "iou_" in key]
+
+
+def test_grid_probe_seed_ensemble_tester_aggregates_per_class_iou(tmp_path):
+    ckpt_path = _make_fake_checkpoint(tmp_path)
+    model = _make_model(ckpt_path, probe_lrs=[1e-1] * 3)
+    results_path = tmp_path / "seed_ensemble_results.json"
+    csv_path = tmp_path / "grid_then_seeds_summary.csv"
+
+    metrics_cb = GridProbeMetrics(num_classes=NUM_CLASSES, class_names=CLASS_NAMES)
+    seed_cb = GridProbeSeedEnsembleTester(
+        results_path=str(results_path), summary_csv_path=str(csv_path), dataset_name="toy"
+    )
+
+    trainer = pl.Trainer(
+        accelerator="cpu",
+        devices=1,
+        max_epochs=1,
+        limit_train_batches=1,
+        num_sanity_val_steps=0,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        callbacks=[metrics_cb, seed_cb],
+    )
+    trainer.fit(model, train_dataloaders=_make_loader(1))
+    trainer.test(model, dataloaders=_make_loader(2))
+
+    results = json.loads(results_path.read_text())
+    assert "iou_ground" in results["aggregate"]
+    assert results["aggregate"]["iou_ground"]["n"] == len(model.probe_names)
+    for probe_name in model.probe_names:
+        assert "iou_ground" in results["per_seed"][probe_name]
+    header = csv_path.read_text().splitlines()[0]
+    assert "iou_ground_mean" in header
+    assert "iou_ground_std" in header
