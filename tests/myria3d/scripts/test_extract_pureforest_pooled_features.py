@@ -117,6 +117,25 @@ def test_train_split_never_filtered_by_leakage_list(tmp_path):
     assert excluded_name in dataset.names
 
 
+def test_pack_indices_by_point_budget_respects_budget_and_batch_size():
+    sizes = [10, 400, 5, 250, 250, 1, 300, 700]  # index 7 (700) exceeds the budget
+    batches = extract.pack_indices_by_point_budget(sizes, point_budget=500, max_batch_size=3)
+
+    # every index appears exactly once
+    flat = sorted(i for batch in batches for i in batch)
+    assert flat == list(range(len(sizes)))
+
+    for batch in batches:
+        assert len(batch) <= 3
+        total = sum(sizes[i] for i in batch)
+        # an oversized singleton is allowed to exceed the budget on its own
+        if len(batch) > 1:
+            assert total <= 500
+
+    # the oversized tile (700 > budget) becomes its own singleton batch
+    assert [7] in batches
+
+
 def test_coord_denormalized_by_coord_scale_m(tmp_path):
     data_root = tmp_path / "pureforest"
     _write_pureforest_tile(data_root, "train", "tile0", category=0, n=10)
