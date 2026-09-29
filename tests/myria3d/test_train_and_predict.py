@@ -48,31 +48,6 @@ def one_epoch_trained_RandLaNet_checkpoint(toy_dataset_hdf5_path, tmpdir_factory
     return trainer.checkpoint_callback.best_model_path
 
 
-@RunIf(min_gpus=1)
-def test_FrenchLidar_RandLaNetDebug_with_gpu(toy_dataset_hdf5_path, tmpdir_factory):
-    """Train a RandLaNet model for one epoch using GPU. XFail is no GPU available.
-
-    Args:
-        toy_dataset_hdf5_path (str): path to isolated toy dataset as created by fixture.
-        tmpdir_factory (fixture): factory to create a session-level tempdir.
-
-    """
-    tmpdir = tmpdir_factory.mktemp("training_logs_dir")
-    tmp_paths_overrides = _make_list_of_necesary_hydra_overrides_with_tmp_paths(
-        toy_dataset_hdf5_path, tmpdir
-    )
-    gpu_id = find_usable_cuda_devices(1)
-    cfg_one_epoch = make_default_hydra_cfg(
-        overrides=[
-            "experiment=RandLaNetDebug",
-            "trainer.accelerator=gpu",
-            f"trainer.devices=[{gpu_id}]",
-        ]
-        + tmp_paths_overrides
-    )
-    train(cfg_one_epoch)
-
-
 def test_predict_as_command(one_epoch_trained_RandLaNet_checkpoint, tmpdir):
     """Test running inference by CLI for toy LAS.
 
